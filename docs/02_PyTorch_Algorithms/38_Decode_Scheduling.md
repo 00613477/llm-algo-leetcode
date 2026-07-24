@@ -9,11 +9,17 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把投机解码、前缀缓存和多 token 生成看清，再看 decode scheduling 如何组织 prefill / decode / batch 才会更顺。
+---
 
-这里的关键不是“谁先跑”这么简单，而是要同时处理不同请求的阶段差异、缓存命中和等待时间。一个调度器如果只顾着轮询顺序，很容易让 GPU 在预填充和解码之间来回切换；如果只顾着 decode 吞吐，又可能把长前缀请求拖得太久。
+## 本节导读
+
+前面几节已经看过投机解码、前缀缓存和多 token 生成：它们都在减少单个请求的解码开销。但真实推理服务里，请求不是一个一个孤立到来的，而是同时排队、同时竞争 GPU、同时处在不同阶段。调度器要解决的，就是如何让这些请求有序进入 prefill 和 decode，而不是让 GPU 在等待和碎片化切换中浪费时间。
+
+本节用一个极简 `DecodeSchedulerSim` 模拟请求入队、优先级排序、阶段切换和持续调度。学完后，你应该能看清 decode scheduling 的主线：不是简单“谁先来谁先跑”，而是在吞吐、延迟、cache 命中和公平性之间建立一套可解释的选择规则。
 
 **关键词：** `decode scheduling`, `prefill`, `batch reordering`
+
+---
 
 ## 前置阅读
 
@@ -32,41 +38,63 @@
 - [24. SGLang RadixAttention | SGLang 基数注意力](../02_PyTorch_Algorithms/24_SGLang_RadixAttention.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA Stream 与异步执行](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
 
+---
 ### Step 1: 原理与痛点
 
-Decode scheduling 的问题不只是“谁先跑”，而是如何同时兼顾 prefill 的吞吐、decode 的延迟和 batch 重组的公平性。不同请求在不同阶段对 GPU 的需求不同，调度器要做的就是把这些阶段穿起来，减少空转和等待。
+> **为什么推理服务不能只靠单个请求的解码优化？**
+>
+> 前面几节已经看过投机解码、前缀缓存和多 token 解码，它们都能降低单个请求的生成成本。但线上服务面对的是一批请求：有的刚进入 prefill，有的正在 decode，有的命中 cache，有的 prompt 很长。如果没有调度策略，GPU 很容易在短 decode、长 prefill 和队列等待之间来回切换。
 
-从机制上看，decode scheduling 其实在回答三个问题：
+Decode Scheduling 解决的不是“谁先来谁先跑”，而是如何在吞吐、延迟和公平性之间做选择。调度器至少要回答三个问题：
 
-- **先调谁**：短请求、长请求、已命中 cache 的请求，谁应该先进入 GPU；
-- **怎么调**：prefill 和 decode 是否要分队列，batch 是否要重组；
-- **何时切换**：当某个请求完成 prefill 后，是否立刻进入 decode，还是要等更多请求一起凑 batch。
+- **先调谁**：cache hit 请求、短请求、高优先级请求，谁应该先进入 GPU；
+- **调什么阶段**：当前更应该推进 prefill，还是继续推进 decode；
+- **什么时候结束**：请求生成到目标长度后，如何从 active 队列中退出。
+
+这一步的核心直觉是：请求的优先级不是静态队列顺序，而是由阶段、cache 状态、业务优先级和当前长度共同决定。
 
 ### Step 2: 代码实现框架
 
-下面的代码会模拟一个最小调度器：输入多个请求后，先区分 prefill 与 decode，再按优先级和缓存命中情况安排执行顺序。这里更重要的是理解“调度决策”本身，而不是某个复杂服务框架的全部细节。
+本节会实现一个最小 `DecodeSchedulerSim`。它不模拟真实模型前向，也不做 batch packing，而是把一个请求的生命周期压缩成两个阶段：先 `prefill`，再多步 `decode`，直到 `generated_len` 达到目标长度。
 
-你可以把它拆成三层：
+代码拆成四个动作：
 
-- **请求层**：记录每个请求当前处于 prefill 还是 decode；
-- **策略层**：决定每一步优先执行哪个请求；
-- **执行层**：把调度结果落到具体的 batch / queue / step 上。
+| 动作 | 对应方法 | 作用 |
+|------|----------|------|
+| 入队 | `enqueue` | 创建请求状态，默认从 prefill 阶段开始 |
+| 排序 | `_schedule_key` | 根据阶段、cache 命中、优先级和长度定义调度顺序 |
+| 单步调度 | `step` | 选择一个 active 请求并推进一个状态变化 |
+| 持续运行 | `run` | 重复执行 step，直到请求完成或达到步数上限 |
+
+这套代码的重点不是实现最优调度器，而是把调度决策显式化。只要 `_schedule_key` 改变，整个调度行为就会改变，这也是推理服务调度器最核心的设计入口。
 
 ### Step 3: 核心机制
 
-一个好的 decode scheduler 往往要同时看队列长度、cache 命中、请求阶段和等待时间。它不是单纯把任务排队，而是尽量让 GPU 既不空转，也不被长请求拖住。
+本节用一个 tuple 作为调度排序键：
 
-换句话说，调度的本质不是“先来先服务”，而是“在吞吐、延迟和公平性之间找一个可解释的平衡点”。如果 batch 一味求大，延迟会被拉长；如果只顾着短请求，长请求又会饿死。
+$$
+key = (phase\_rank, cache\_rank, -priority, total\_len, request\_id)
+$$
+
+排序键越小，越先被调度。这里的含义是：先区分阶段，再考虑 cache 命中，再考虑业务优先级，最后用长度和 request id 做稳定排序。
+
+这个规则不是唯一答案，而是一个可解释的教学策略。`phase_rank` 控制 prefill / decode 的切换倾向，`cache_rank` 体现 cache hit 的复用收益，`-priority` 让高优先级请求排在前面，`total_len` 避免长序列长期占住前排。真实系统会再加入 token budget、batch size、KV Cache 容量和等待时间等约束。
 
 ### Step 4: 动手实战
 
-**要求**：请补全下方 `DecodeSchedulerSim`，实现一个极简版的 prefill / decode 调度器。先把请求阶段、优先级和队列切换逻辑跑通，再考虑更复杂的服务策略。
+**要求**：请补全下方 `DecodeSchedulerSim`，跑通“入队 -> 排序 -> 单步推进 -> 持续调度”这条链路。你需要重点完成四个位置：构造请求状态、定义排序键、选择本轮请求，以及更新已执行步数。
+
+完成后观察测试中的事件序列：`prefill_to_decode` 表示请求完成预填充并进入 decode，`decode_one_step` 表示生成推进一步，`finish` 表示请求完成。只要这些事件能按调度规则串起来，就说明 decode scheduling 的最小闭环已经跑通。
+
 
 ```python
-from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Sequence
+from dataclasses import dataclass
+from typing import Dict, List, Literal
+
+```
 
 
+```python
 Phase = Literal['prefill', 'decode']
 
 
@@ -95,21 +123,97 @@ class DecodeSchedulerSim:
         self.queue: List[RequestState] = []
         self.timeline: List[Dict[str, int | str]] = []
 
-    # TODO 1: 入队一个请求，记录其初始阶段
     def enqueue(self, request_id: int, prompt_len: int, priority: int = 0, cache_hit: bool = False) -> None:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 1: 构造请求状态，并加入调度队列
+        # 提示: RequestState 默认处于 prefill 阶段，只需要传入请求属性
+        # ==========================================
+        # request = ???
+        self.queue.append(request)
 
-    # TODO 2: 为请求定义调度排序键
     def _schedule_key(self, req: RequestState):
-        raise NotImplementedError
+        # ==========================================
+        # TODO 2: 定义调度排序键
+        # 提示: prefill 优先于 decode，cache hit 优先于 cache miss，高 priority 更靠前
+        # ==========================================
+        phase_rank = 0 if req.phase == 'prefill' else 1
+        cache_rank = 0 if req.cache_hit else 1
+        # key = ???
+        return key
 
-    # TODO 3: 执行一个最小调度步
     def step(self) -> Dict[str, int | str] | None:
-        raise NotImplementedError
+        active = [req for req in self.queue if not req.done]
+        if not active:
+            return None
 
-    # TODO 4: 持续调度直到完成或达到步数上限
+        # ==========================================
+        # TODO 3: 从 active 请求中选择本轮要调度的请求
+        # 提示: 使用 min(..., key=self._schedule_key) 选择排序最靠前的请求
+        # ==========================================
+        # chosen = ???
+
+        if chosen.phase == 'prefill':
+            chosen.phase = 'decode'
+            action = 'prefill_to_decode'
+        else:
+            chosen.generated_len += 1
+            action = 'finish' if chosen.done else 'decode_one_step'
+
+        event = {
+            'request_id': chosen.request_id,
+            'phase': 'prefill' if action == 'prefill_to_decode' else 'decode',
+            'action': action,
+            'prompt_len': chosen.prompt_len,
+            'generated_len': chosen.generated_len,
+        }
+        self.timeline.append(event)
+        return event
+
     def run(self, max_steps: int = 100) -> List[Dict[str, int | str]]:
-        raise NotImplementedError
+        steps = 0
+        while steps < max_steps:
+            event = self.step()
+            if event is None:
+                break
+            # ==========================================
+            # TODO 4: 更新已经执行的调度步数
+            # 提示: 每成功执行一次 step，steps 增加 1
+            # ==========================================
+            # steps = ???
+        return self.timeline
+
+```
+
+
+```python
+# 测试你的实现
+def test_decode_scheduler():
+    try:
+        sim = DecodeSchedulerSim()
+        sim.enqueue(request_id=1, prompt_len=2, priority=2, cache_hit=True)
+        sim.enqueue(request_id=2, prompt_len=3, priority=1, cache_hit=False)
+        sim.enqueue(request_id=3, prompt_len=1, priority=3, cache_hit=True)
+
+        assert len(sim.queue) == 3
+        assert sim.queue[0].phase == 'prefill'
+
+        events = sim.run(max_steps=20)
+        assert len(events) == 9
+        assert events[0]['request_id'] == 3
+        assert events[0]['action'] == 'prefill_to_decode'
+        assert any(e['action'] == 'finish' for e in events)
+        assert all(req.done for req in sim.queue)
+        assert sim.timeline is events
+
+        print('✅ DecodeSchedulerSim 测试通过')
+    except NotImplementedError as e:
+        raise NotImplementedError('请先完成 TODO 代码！') from e
+    except (AttributeError, NameError, TypeError, ValueError, AssertionError) as e:
+        raise NotImplementedError('请先完成 TODO 代码！') from e
+
+
+test_decode_scheduler()
+
 ```
 
 ---
@@ -128,10 +232,6 @@ class DecodeSchedulerSim:
 ```python
 # TODO：下面是题目区的参考实现。
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Sequence
-
-
 Phase = Literal['prefill', 'decode']
 
 
@@ -161,93 +261,98 @@ class DecodeSchedulerSim:
         self.timeline: List[Dict[str, int | str]] = []
 
     def enqueue(self, request_id: int, prompt_len: int, priority: int = 0, cache_hit: bool = False) -> None:
-        """加入一个请求，默认先处于 prefill 阶段。"""
-        self.queue.append(
-            RequestState(
-                request_id=request_id,
-                prompt_len=prompt_len,
-                priority=priority,
-                cache_hit=cache_hit,
-            )
+        # ==========================================
+        # TODO 1: 构造请求状态，并加入调度队列
+        # 提示: RequestState 默认处于 prefill 阶段，只需要传入请求属性
+        # ==========================================
+        request = RequestState(
+            request_id=request_id,
+            prompt_len=prompt_len,
+            priority=priority,
+            cache_hit=cache_hit,
         )
+        self.queue.append(request)
 
     def _schedule_key(self, req: RequestState):
-        """优先挑选 cache 命中高、等待少、阶段更适合推进的请求。"""
+        # ==========================================
+        # TODO 2: 定义调度排序键
+        # 提示: prefill 优先于 decode，cache hit 优先于 cache miss，高 priority 更靠前
+        # ==========================================
         phase_rank = 0 if req.phase == 'prefill' else 1
         cache_rank = 0 if req.cache_hit else 1
-        return (phase_rank, cache_rank, -req.priority, req.total_len, req.request_id)
+        key = (phase_rank, cache_rank, -req.priority, req.total_len, req.request_id)
+        return key
 
     def step(self) -> Dict[str, int | str] | None:
-        """执行一个最小调度步，返回本轮被调度的请求信息。"""
         active = [req for req in self.queue if not req.done]
         if not active:
             return None
 
+        # ==========================================
+        # TODO 3: 从 active 请求中选择本轮要调度的请求
+        # 提示: 使用 min(..., key=self._schedule_key) 选择排序最靠前的请求
+        # ==========================================
         chosen = min(active, key=self._schedule_key)
         if chosen.phase == 'prefill':
             chosen.phase = 'decode'
-            event = {
-                'request_id': chosen.request_id,
-                'phase': 'prefill',
-                'action': 'prefill_to_decode',
-                'prompt_len': chosen.prompt_len,
-                'generated_len': chosen.generated_len,
-            }
+            action = 'prefill_to_decode'
         else:
             chosen.generated_len += 1
-            if chosen.done:
-                event = {
-                    'request_id': chosen.request_id,
-                    'phase': 'decode',
-                    'action': 'finish',
-                    'prompt_len': chosen.prompt_len,
-                    'generated_len': chosen.generated_len,
-                }
-            else:
-                event = {
-                    'request_id': chosen.request_id,
-                    'phase': 'decode',
-                    'action': 'decode_one_step',
-                    'prompt_len': chosen.prompt_len,
-                    'generated_len': chosen.generated_len,
-                }
+            action = 'finish' if chosen.done else 'decode_one_step'
 
+        event = {
+            'request_id': chosen.request_id,
+            'phase': 'prefill' if action == 'prefill_to_decode' else 'decode',
+            'action': action,
+            'prompt_len': chosen.prompt_len,
+            'generated_len': chosen.generated_len,
+        }
         self.timeline.append(event)
         return event
 
     def run(self, max_steps: int = 100) -> List[Dict[str, int | str]]:
-        """持续调度到所有请求完成，或达到最大步数。"""
         steps = 0
         while steps < max_steps:
             event = self.step()
             if event is None:
                 break
-            steps += 1
+            # ==========================================
+            # TODO 4: 更新已经执行的调度步数
+            # 提示: 每成功执行一次 step，steps 增加 1
+            # ==========================================
+            steps = steps + 1
         return self.timeline
-
-
-def _demo_scheduler() -> List[Dict[str, int | str]]:
-    sim = DecodeSchedulerSim()
-    sim.enqueue(request_id=1, prompt_len=2, priority=2, cache_hit=True)
-    sim.enqueue(request_id=2, prompt_len=3, priority=1, cache_hit=False)
-    sim.enqueue(request_id=3, prompt_len=1, priority=3, cache_hit=True)
-    return sim.run(max_steps=12)
 
 ```
 
 ### 解析
-- Decode scheduling 的重点是同时兼顾 prefill 吞吐、decode 延迟和队列公平性。
-- 本页把调度拆成请求层、策略层、执行层，便于理解“先调谁、怎么调、何时切换”。
-- 只要能观察到调度事件序列，就能继续往更复杂的策略扩展。
-### 测试
 
-```python
-sim = DecodeSchedulerSim()
-sim.enqueue(request_id=1, prompt_len=2, priority=2, cache_hit=True)
-sim.enqueue(request_id=2, prompt_len=3, priority=1, cache_hit=False)
-events = sim.run(max_steps=10)
-assert len(events) > 0
-assert all('request_id' in e for e in events)
-assert any(e['action'] in {'prefill_to_decode', 'decode_one_step', 'finish'} for e in events)
-print('✅ DecodeSchedulerSim 测试通过')
-```
+**1. TODO 1: 构造请求状态**
+- **实现方式**：`request = RequestState(request_id=request_id, prompt_len=prompt_len, priority=priority, cache_hit=cache_hit)`
+- **关键点**：请求入队时默认处于 `prefill` 阶段，`generated_len` 也从 0 开始
+- **技术细节**：`RequestState` 把请求的阶段、优先级、cache 命中和长度状态收在一起，后续调度只需要读取这个状态对象
+
+**2. TODO 2: 定义调度排序键**
+- **实现方式**：`key = (phase_rank, cache_rank, -req.priority, req.total_len, req.request_id)`
+- **关键点**：排序键越小越优先，因此 `prefill` 用 0、`decode` 用 1，cache hit 用 0、cache miss 用 1
+- **技术细节**：`-req.priority` 用来让更高优先级排在前面；`total_len` 和 `request_id` 用作稳定的 tie-breaker
+
+**3. TODO 3: 选择本轮调度请求**
+- **实现方式**：`chosen = min(active, key=self._schedule_key)`
+- **关键点**：调度器不是按入队顺序直接执行，而是每一步都根据当前状态重新选择最适合推进的请求
+- **技术细节**：`active` 已经过滤掉完成请求，`min(..., key=...)` 会把排序规则集中交给 `_schedule_key`，避免调度逻辑散落在多个地方
+
+**4. TODO 4: 更新调度步数**
+- **实现方式**：`steps = steps + 1`
+- **关键点**：只有 `step()` 真正返回事件时才增加步数；如果返回 `None`，说明没有可调度请求，应立即退出
+- **技术细节**：`max_steps` 是防御性上限，避免调度规则写错后进入无限循环
+
+**Decode Scheduling 核心机制**
+- **阶段差异**：`prefill` 通常计算量大、适合批处理；`decode` 每步短但频繁，直接影响 token latency
+- **排序规则**：调度器需要同时考虑请求阶段、cache 命中、业务优先级和序列长度，而不是简单 FIFO
+- **状态推进**：一次 prefill 会把请求切到 decode；decode 每执行一步就增加 `generated_len`，直到请求完成
+
+**工程优化要点**
+- **吞吐与延迟权衡**：过度追求大 batch 会增加等待时间，过度追求低延迟又会降低 GPU 利用率
+- **Cache-aware 调度**：cache hit 请求通常更便宜，优先调度可以提升复用收益，但不能让长请求长期饥饿
+- **真实系统扩展**：生产调度器还会加入 token budget、KV Cache 容量、请求超时、抢占和多队列策略

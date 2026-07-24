@@ -1,4 +1,5 @@
 # 36. Prefix Caching and Chunked Prefill | 前缀缓存与分块预填充
+
 **难度：** Hard | **环境：** GPU required | **标签：** `KV Cache`, `Prefix Cache`, `推理优化` | **目标人群：** 推理系统与缓存工程
 
 > 🚀 **云端运行环境**
@@ -9,13 +10,21 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把分页式 KV 管理和前缀复用看清，再看前缀缓存与分块预填充会更容易理解长 prompt 的加速方式。
+---
+
+## 本节导读
+
+长 prompt 的推理压力不只来自 token 数量，还来自重复：很多请求会共享相同 system prompt、工具说明或多轮历史。如果每个请求都重新 prefill 一遍，共享前缀会被反复计算，KV cache 也难以形成稳定复用。
+
+本节把前缀缓存和分块预填充拆成一个最小 cache manager：先登记可复用前缀，再匹配新请求能命中的最长前缀，最后把 prompt 切成固定大小 chunk 形成 prefill 计划。完成后，你应该能看懂“共享前缀不要重复算”和“长 prefill 不要一次压太重”这两条推理优化思路如何落到代码里。
 
 **关键词：** `prefix caching`, `chunked prefill`, `cache reuse`
 
+---
+
 ## 前置阅读
 
-**导语：** 先看 PagedAttention、RadixAttention 和 FlashAttention 记忆模型，再看前缀缓存与分块预填充会更容易。
+**导语：** 先看 PagedAttention、RadixAttention 和 FlashAttention 记忆模型，再看前缀缓存与分块预填充会更容易理解长 prompt 的加速方式。
 
 - [22. vLLM PagedAttention | vLLM PagedAttention](../02_PyTorch_Algorithms/22_vLLM_PagedAttention.md)
 - [24. SGLang RadixAttention | SGLang 基数注意力](../02_PyTorch_Algorithms/24_SGLang_RadixAttention.md)
@@ -24,40 +33,73 @@
 
 ## 相关阅读
 
-**导语：** 前缀缓存之后，可以继续看投机解码和解码策略。
+**导语：** 理解 prefill 复用后，可以继续看多 token 解码、decode scheduling 和 profiling 如何进一步优化生成阶段。
 
+- [37. Multi-Token Decoding | 多 Token 解码](../02_PyTorch_Algorithms/37_Multi_Token_Decoding.md)
+- [38. Decode Scheduling | 解码调度](../02_PyTorch_Algorithms/38_Decode_Scheduling.md)
 - [23. Speculative Decoding | 投机解码](../02_PyTorch_Algorithms/23_Speculative_Decoding.md)
-- [21. Decoding Strategies | 解码策略](../02_PyTorch_Algorithms/21_Decoding_Strategies.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 
+---
 ### Step 1: 原理与痛点
 
-长 prompt 的问题并不只在于“要算很多 token”，更在于很多请求会重复共享同一段前缀。prefill 阶段会把整段上下文一次性灌入模型，计算和显存开销都很重；如果每个请求都重新 prefill 一遍，那同一段前缀就会被重复消耗多次。前缀缓存要解决的，就是把已经算过的前缀结果按块保存起来，让后来的请求直接复用。
+> **为什么长 prompt 推理不能只靠“算得更快”？**
+>
+> 关键在于 prefill 阶段经常会重复计算同一段前缀。很多在线请求共享系统提示词、角色设定、工具说明或 RAG 模板，但如果每个请求都从头 prefill，一段已经算过的上下文会被反复送进模型，GPU 时间和 KV Cache 写入都会被重复消耗。
 
-从机制上看，Prefix Caching 关注的是“共享前缀不要重复算”，Chunked Prefill 关注的是“单次预填充不要一次压太重”。前者解决命中与复用，后者解决切块与节奏，两者共同把长 prompt 的 prefill 压力拆散。
+Prefix Caching 解决的是“共享前缀不要重复算”：把已经完成 prefill 的前缀缓存起来，后续请求只要从开头命中这段前缀，就可以复用已有结果。Chunked Prefill 解决的是另一个问题：长 prompt 一次性 prefill 会制造较高的显存和调度压力，因此可以把 prompt 拆成固定大小的 chunk，分块进入执行计划。
+
+这两个机制关注的不是同一个层面：Prefix Caching 关注复用，Chunked Prefill 关注执行节奏。前者减少重复计算，后者降低单次长上下文 prefill 的峰值压力。理解了这一点，下面的代码就可以围绕“登记、命中、拆分、分块”四个动作展开。
 
 ### Step 2: 代码实现框架
 
-下面的代码会先模拟一个最小 cache manager，再把前缀命中、分块预填充和缓存复用拆成几个小动作：计算 block 数、记录前缀块表、在 chunk 级别复用缓存、把命中的前缀和待计算后缀拆开。你可以先把它理解成三层结构：
+本节会实现一个最小 `PrefixCacheManager`。真实系统缓存的是 KV 张量，本节为了突出核心逻辑，只用 token 序列表示 prompt 前缀，用 tuple block 表示可管理的缓存块。
 
-- **前缀索引层**：判断哪些 token 已经在缓存里；
-- **块管理层**：把连续前缀切成固定大小 block 方便复用；
-- **调度层**：决定何时分块 prefill、何时直接复用已有块。
+代码拆成六个动作：
+
+| 动作 | 对应方法 | 作用 |
+|------|----------|------|
+| 统一表示 | `_normalize` | 把输入 token 转成统一的 `list[int]` |
+| 分块 | `_chunk_tokens` | 按 `block_size` 切成多个 tuple block |
+| 登记缓存 | `add_prefix` | 保存完整前缀和它的分块形式 |
+| 匹配前缀 | `match_prefix` | 找出新 prompt 能命中的最长缓存前缀 |
+| 拆分 prompt | `split_prompt` | 分出可复用前缀和仍需 prefill 的后缀 |
+| 执行计划 | `chunked_prefill_plan` | 生成分块 prefill 计划 |
+
+这套设计故意不引入真实 KV Cache 的内存布局，是为了先把 cache 命中的判断逻辑讲清楚：只有从 prompt 开头连续命中的部分，才能安全复用；中间某段相同 token 不能被当作前缀缓存命中。
 
 ### Step 3: 核心机制
 
-本页的关键不是把 cache 变小，而是把 prefill 的结果变成“可按块命中、可按块复用、可按块扩展”的结构。Chunked Prefill 则是把过长的前缀拆成较小 chunk，避免一次性 prefill 压得太重。
+Prefix Caching 的核心可以写成一个简单拆分：
 
-从工程直觉上看，Prefix Caching 更像“缓存命中率优化”，Chunked Prefill 更像“前向阶段节奏优化”。当二者配合时，系统既能避免重复计算，又能避免单次 prefill 占用过多显存和时间。
+$$
+prompt = reusable\_prefix + suffix
+$$
+
+其中 `reusable_prefix` 是已经命中缓存、可以复用 prefill 结果的部分；`suffix` 是还没有缓存、必须继续执行 prefill 的部分。命中越长，suffix 越短，重复计算就越少。
+
+Chunked Prefill 则把 prompt 或 suffix 进一步拆成：
+
+$$
+chunks = [block_1, block_2, \dots, block_n]
+$$
+
+每个 block 最多包含 `block_size` 个 token。这样做的好处是执行计划更细，调度器可以按块安排 prefill，而不是让一个超长 prompt 一次性占住计算资源。本节代码里的 chunk 只是 tuple，但它对应真实系统里更底层的 KV block、page 或调度单元。
 
 ### Step 4: 动手实战
 
-**要求**：请补全下方 `PrefixCacheManager`，实现一个极简版的前缀缓存与分块预填充管理器。先把前缀命中和块复用这两个概念跑通，再考虑额外的工程优化。
+**要求**：请补全下方 `PrefixCacheManager`，跑通“登记 -> 命中 -> 拆分 -> 分块计划”这条链路。你需要重点完成六个位置：统一 token 表示、切块、登记前缀块、判断最长命中、拆出 suffix，以及复用切块逻辑生成执行计划。
+
+完成后观察测试中的三个结果：`match_prefix` 是否能找到最长前缀，`split_prompt` 是否能正确拆出复用部分和待计算后缀，`chunked_prefill_plan` 是否和 block size 保持一致。只要这三点成立，就说明前缀缓存和分块预填充的核心链路已经跑通。
+
 
 ```python
 from typing import List, Sequence, Tuple
 
+```
 
+
+```python
 class PrefixCacheManager:
     """极简版前缀缓存与分块预填充管理器。"""
 
@@ -68,29 +110,107 @@ class PrefixCacheManager:
         self.cached_prefixes: List[Tuple[int, ...]] = []
         self.chunked_prefixes: List[List[Tuple[int, ...]]] = []
 
-    # TODO 1: 统一 token 表示，便于做前缀匹配
     def _normalize(self, tokens: Sequence[int]) -> List[int]:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 1: 统一 token 表示，便于做前缀匹配
+        # 提示: 将输入转换成普通 list，避免 tuple/list 混用导致比较不稳定
+        # ==========================================
+        # normalized = ???
+        return normalized
 
-    # TODO 2: 按 block_size 把 prompt 切成多个块
     def _chunk_tokens(self, tokens: Sequence[int]) -> List[Tuple[int, ...]]:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 2: 按 block_size 把 prompt 切成多个块
+        # 提示: 先 normalize，再每 block_size 个 token 组成一个 tuple
+        # ==========================================
+        tokens = self._normalize(tokens)
+        # chunks = ???
+        return chunks
 
-    # TODO 3: 记录一个可复用的前缀
     def add_prefix(self, prefix_tokens: Sequence[int]) -> None:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 3: 记录一个可复用的前缀
+        # 提示: cached_prefixes 存完整前缀，chunked_prefixes 存分块结果
+        # ==========================================
+        prefix = tuple(self._normalize(prefix_tokens))
+        if prefix not in self.cached_prefixes:
+            self.cached_prefixes.append(prefix)
+            # prefix_chunks = ???
+            self.chunked_prefixes.append(prefix_chunks)
 
-    # TODO 4: 计算 prompt 能命中的最长缓存前缀
     def match_prefix(self, prompt_tokens: Sequence[int]) -> int:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 4: 计算 prompt 能命中的最长缓存前缀
+        # 提示: 只允许从 prompt 开头连续命中，返回最长命中长度
+        # ==========================================
+        prompt = self._normalize(prompt_tokens)
+        best_len = 0
+        for cached_prefix in self.cached_prefixes:
+            if len(cached_prefix) > len(prompt):
+                continue
+            # is_match = ???
+            if is_match:
+                best_len = max(best_len, len(cached_prefix))
+        return best_len
 
-    # TODO 5: 拆出可复用前缀和待计算后缀
     def split_prompt(self, prompt_tokens: Sequence[int]) -> Tuple[List[int], List[int], int]:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 5: 拆出可复用前缀和待计算后缀
+        # 提示: hit_len 之前是可复用前缀，之后是待 prefill 后缀
+        # ==========================================
+        prompt = self._normalize(prompt_tokens)
+        hit_len = self.match_prefix(prompt)
+        # reusable_prefix = ???
+        # suffix = ???
+        return reusable_prefix, suffix, hit_len
 
-    # TODO 6: 生成分块预填充执行计划
     def chunked_prefill_plan(self, prompt_tokens: Sequence[int]) -> List[Tuple[int, ...]]:
-        raise NotImplementedError
+        # ==========================================
+        # TODO 6: 生成分块预填充执行计划
+        # 提示: 直接复用 _chunk_tokens，保持切块逻辑一致
+        # ==========================================
+        # plan = ???
+        return plan
+
+```
+
+### 测试
+
+
+```python
+# 运行此单元格以测试你的实现
+def test_prefix_cache_manager():
+    try:
+        manager = PrefixCacheManager(block_size=2)
+        manager.add_prefix([1, 2, 3])
+        manager.add_prefix([1, 2, 9])
+
+        assert manager.cached_prefixes == [(1, 2, 3), (1, 2, 9)]
+        assert manager.chunked_prefixes[0] == [(1, 2), (3,)]
+        assert manager.match_prefix([1, 2, 3, 9]) == 3
+        assert manager.match_prefix([1, 2, 9, 8]) == 3
+        assert manager.match_prefix([1, 2, 0]) == 0
+
+        prefix, suffix, hit_len = manager.split_prompt([1, 2, 3, 9])
+        assert prefix == [1, 2, 3]
+        assert suffix == [9]
+        assert hit_len == 3
+
+        assert manager.chunked_prefill_plan([1, 2, 3, 4, 5]) == [(1, 2), (3, 4), (5,)]
+        print("✅ PrefixCacheManager 测试通过")
+    except NotImplementedError:
+        print("请先完成 TODO 代码！")
+        raise
+    except (AttributeError, NameError, TypeError, ValueError) as e:
+        print("代码可能未完成，导致变量未定义")
+        raise NotImplementedError("请先完成 TODO 代码！") from e
+    except AssertionError as e:
+        print(f"❌ 测试失败: {e}")
+        raise NotImplementedError("请先完成 TODO 代码！") from e
+
+
+test_prefix_cache_manager()
+
 ```
 
 ---
@@ -102,16 +222,13 @@ class PrefixCacheManager:
 <br><br><br><br><br><br><br><br><br><br>
 
 ---
+
 ## 参考代码与解析
 
 ### 代码
 
+
 ```python
-# TODO：下面是题目区的参考实现。
-
-from typing import Iterable, List, Sequence, Tuple
-
-
 class PrefixCacheManager:
     """极简版前缀缓存与分块预填充管理器。"""
 
@@ -123,57 +240,107 @@ class PrefixCacheManager:
         self.chunked_prefixes: List[List[Tuple[int, ...]]] = []
 
     def _normalize(self, tokens: Sequence[int]) -> List[int]:
-        return list(tokens)
+        # ==========================================
+        # TODO 1: 统一 token 表示，便于做前缀匹配
+        # 提示: 将输入转换成普通 list，避免 tuple/list 混用导致比较不稳定
+        # ==========================================
+        normalized = list(tokens)
+        return normalized
 
     def _chunk_tokens(self, tokens: Sequence[int]) -> List[Tuple[int, ...]]:
+        # ==========================================
+        # TODO 2: 按 block_size 把 prompt 切成多个块
+        # 提示: 先 normalize，再每 block_size 个 token 组成一个 tuple
+        # ==========================================
         tokens = self._normalize(tokens)
-        return [tuple(tokens[i : i + self.block_size]) for i in range(0, len(tokens), self.block_size)]
+        chunks = [tuple(tokens[i : i + self.block_size]) for i in range(0, len(tokens), self.block_size)]
+        return chunks
 
     def add_prefix(self, prefix_tokens: Sequence[int]) -> None:
-        """登记一个已缓存的前缀。"""
+        # ==========================================
+        # TODO 3: 记录一个可复用的前缀
+        # 提示: cached_prefixes 存完整前缀，chunked_prefixes 存分块结果
+        # ==========================================
         prefix = tuple(self._normalize(prefix_tokens))
         if prefix not in self.cached_prefixes:
             self.cached_prefixes.append(prefix)
-            self.chunked_prefixes.append(self._chunk_tokens(prefix))
+            prefix_chunks = self._chunk_tokens(prefix)
+            self.chunked_prefixes.append(prefix_chunks)
 
     def match_prefix(self, prompt_tokens: Sequence[int]) -> int:
-        """返回 prompt 能复用的最长缓存前缀长度。"""
+        # ==========================================
+        # TODO 4: 计算 prompt 能命中的最长缓存前缀
+        # 提示: 只允许从 prompt 开头连续命中，返回最长命中长度
+        # ==========================================
         prompt = self._normalize(prompt_tokens)
         best_len = 0
         for cached_prefix in self.cached_prefixes:
             if len(cached_prefix) > len(prompt):
                 continue
-            if prompt[: len(cached_prefix)] == list(cached_prefix):
+            is_match = prompt[: len(cached_prefix)] == list(cached_prefix)
+            if is_match:
                 best_len = max(best_len, len(cached_prefix))
         return best_len
 
     def split_prompt(self, prompt_tokens: Sequence[int]) -> Tuple[List[int], List[int], int]:
-        """把 prompt 拆成可复用前缀和待计算后缀。"""
+        # ==========================================
+        # TODO 5: 拆出可复用前缀和待计算后缀
+        # 提示: hit_len 之前是可复用前缀，之后是待 prefill 后缀
+        # ==========================================
         prompt = self._normalize(prompt_tokens)
         hit_len = self.match_prefix(prompt)
-        return prompt[:hit_len], prompt[hit_len:], hit_len
+        reusable_prefix = prompt[:hit_len]
+        suffix = prompt[hit_len:]
+        return reusable_prefix, suffix, hit_len
 
     def chunked_prefill_plan(self, prompt_tokens: Sequence[int]) -> List[Tuple[int, ...]]:
-        """把 prompt 拆成分块预填充的执行计划。"""
-        return self._chunk_tokens(prompt_tokens)
+        # ==========================================
+        # TODO 6: 生成分块预填充执行计划
+        # 提示: 直接复用 _chunk_tokens，保持切块逻辑一致
+        # ==========================================
+        plan = self._chunk_tokens(prompt_tokens)
+        return plan
 
 ```
 
 ### 解析
-- 前缀缓存的核心是“登记过的前缀可以复用”，而不是每次都重算。
-- 分块预填充把长 prompt 拆成多个块，便于控制峰值开销。
-- 这一页只要把“匹配 -> 切块 -> 计划”三件事串起来，就能理解其工程直觉。
-### 测试
 
-```python
-manager = PrefixCacheManager(block_size=2)
-manager.add_prefix([1, 2, 3])
-manager.add_prefix([1, 2, 9])
-assert manager.match_prefix([1, 2, 3, 9]) == 3
-prefix, suffix, hit_len = manager.split_prompt([1, 2, 3, 9])
-assert prefix == [1, 2, 3]
-assert suffix == [9]
-assert hit_len == 3
-assert manager.chunked_prefill_plan([1, 2, 3, 4, 5]) == [(1, 2), (3, 4), (5,)]
-print('✅ PrefixCacheManager 测试通过')
-```
+**1. TODO 1: 统一 token 表示**
+- **实现方式**：`normalized = list(tokens)`
+- **关键点**：把 `list`、`tuple` 等输入统一成普通 `list[int]`，避免后续比较时表示不一致
+- **技术细节**：前缀匹配依赖切片比较，统一表示后可以直接使用 `prompt[:n] == list(cached_prefix)` 这类判断
+
+**2. TODO 2: 按 block_size 分块**
+- **实现方式**：`chunks = [tuple(tokens[i : i + self.block_size]) for i in range(0, len(tokens), self.block_size)]`
+- **关键点**：每个 chunk 使用 `tuple` 保存，便于表示不可变的缓存块
+- **技术细节**：最后一个 chunk 可以不足 `block_size`，这对应真实系统中尾块不满的情况
+
+**3. TODO 3: 登记可复用前缀**
+- **实现方式**：`prefix_chunks = self._chunk_tokens(prefix)`，再追加到 `chunked_prefixes`
+- **关键点**：`cached_prefixes` 保存完整前缀，`chunked_prefixes` 保存同一个前缀的分块视图
+- **技术细节**：只有当前缀尚未登记时才写入缓存，避免重复前缀污染缓存统计
+
+**4. TODO 4: 计算最长命中前缀**
+- **实现方式**：`is_match = prompt[: len(cached_prefix)] == list(cached_prefix)`
+- **关键点**：这里只允许从 prompt 开头连续命中，不能把中间子串当成可复用前缀
+- **技术细节**：遍历所有已缓存前缀并维护 `best_len`，可以在多个候选前缀中选择最长命中
+
+**5. TODO 5: 拆分可复用前缀和待计算后缀**
+- **实现方式**：`reusable_prefix = prompt[:hit_len]`，`suffix = prompt[hit_len:]`
+- **关键点**：`hit_len` 之前的 token 可以复用缓存，之后的 token 仍需要执行 prefill
+- **技术细节**：这个拆分把 prefix caching 的收益显式落到代码里：命中越长，需要重新计算的 suffix 越短
+
+**6. TODO 6: 生成分块预填充计划**
+- **实现方式**：`plan = self._chunk_tokens(prompt_tokens)`
+- **关键点**：复用 `_chunk_tokens`，保证缓存分块和 prefill 执行计划使用同一套切块规则
+- **技术细节**：真实系统可以按 chunk 调度长 prompt 的 prefill，降低单次长上下文带来的峰值压力
+
+**Prefix Caching 核心机制**
+- **重复前缀问题**：多轮对话、系统提示词和 RAG 模板经常共享长前缀，如果每次都重新 prefill，会浪费大量计算
+- **缓存命中方式**：系统先判断新 prompt 是否以某个已缓存前缀开头，命中部分直接复用，未命中后缀继续计算
+- **分块组织**：把长前缀拆成固定大小的 block 后，更容易管理缓存、复用局部前缀，并控制调度粒度
+
+**工程优化要点**
+- **显存管理**：缓存真实系统中的 KV 张量会占用显存，需要配合淘汰策略和 block 管理
+- **调度收益**：Chunked Prefill 可以把长 prompt 拆成多个小任务，降低单次 prefill 对延迟和显存峰值的冲击
+- **适用场景**：共享系统提示词、多轮会话、Agent 工具调用和 RAG 模板化 prompt 都容易受益于前缀缓存
