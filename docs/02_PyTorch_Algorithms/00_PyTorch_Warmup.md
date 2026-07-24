@@ -37,11 +37,6 @@
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 
 ---
-# 导入所有必需的库
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import einops
 ### Part 1: 张量维度变换与 `einops`
 
 无论是注意力里的多头合并，还是各种特征整理，都会反复用到张量形状重排同一类操作。
@@ -55,6 +50,15 @@ import einops
 > - **`einops` 实现**：`rearrange(x, 'b h s d -> b s (h d)')` —— 维度变换的语义直接写在字符串中，代码即文档（Self-documenting）。
 >
 > 这正是为什么现代深度学习框架和开源模型广泛拥抱 **`einops`** 库，它能让复杂的张量操作变得语义清晰、安全可防错。
+
+```python
+# 导入所有必需的库
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import einops
+```
+
 
 ```python
 def tensor_warmup(x: torch.Tensor):

@@ -40,7 +40,7 @@ MoE 的核心就是把 MLP 拆成多个 expert，再用 Router 为每个 token �
 ---
 ### Step 1: 核心思想与痛点
 
-这一节先把稠密模型为什么贵、MoE 为什么能省算力讲清楚。
+稠密模型的主要成本来自每个 token 都要经过全部参数，而 MoE 的核心思路是只激活少数专家来降低计算量。
 
 > **Dense (稠密) 模型的痛点：**
 > 在标准的 Transformer 中，每一个 Token 都必须经过全网络的所有参数（比如 70B 的 LLaMA）。这导致随着模型变大，推理和训练的计算量呈线性爆炸。
@@ -58,7 +58,7 @@ MoE 的核心就是把 MLP 拆成多个 expert，再用 Router 为每个 token �
 
 ###  Step 3: 核心数学机制：Top-K Routing
 
-这一节把 Router、Top-K 和重归一化的顺序摆清楚，后面的代码就是按这条链路落地。
+Top-K Routing 的关键不是只选出最大专家，而是按“全局 Softmax -> Top-K -> 重归一化”的顺序保留全局置信度。
 
 **1. 门控网络 (Gating / Router)：**
 给定输入 Token 的特征 $x \in \mathbb{R}^d$，我们用一个线性层将其映射到各个专家的打分：
@@ -81,7 +81,7 @@ $$ y = \sum_{i \in TopK} w_i \cdot \text{Expert}_{idx_i}(x) $$
 
 ###  Step 4: 动手实战
 
-这里开始把全局 Softmax、Top-K 截取和稀疏专家分发写成最小可运行实现。
+接下来把全局 Softmax、Top-K 截取和稀疏专家分发写成最小可运行实现。
 
 **要求**：请补全下方 `TopKRouter` 函数。
 这也是面试中非常经典的 `torch.topk`、`scatter` 和 `gather` 等高级张量操作的考察点。
@@ -162,7 +162,7 @@ class SparseMoEBlock(nn.Module):
         flat_hidden_states = hidden_states.view(-1, hidden_size)
         
         # 工业界(vLLM/Megatron)会通过 Token Sorting (索引排序) 汇聚同专家的Token，
-        # 这里为便于理解核心算法逻辑，使用 For 循环遍历被选中的 Expert
+        # 为便于理解核心算法逻辑，使用 For 循环遍历被选中的 Expert
         for expert_idx, expert in enumerate(self.experts):
             token_idx, kth_expert = torch.where(selected_experts == expert_idx)
             if token_idx.shape[0] > 0:
@@ -309,7 +309,7 @@ class SparseMoEBlock(nn.Module):
 
 - **实现方式**：`routing_weights, selected_experts = torch.topk(routing_probs, self.top_k, dim=-1)`
 - **关键点**：从全局概率分布中提取最大的 K 个概率值及其对应的专家索引。
-- **本质区别**：这里截取的是**概率**而非原始 logits，这是与错误做法的核心差异。
+- **本质区别**：截取对象是**概率**而非原始 logits，这是与错误做法的核心差异。
 - **工业实践**：Mixtral 8x7B、DeepSeek 等主流 MoE 模型均采用此方法。
 
 **3. TODO 3: 重归一化**
