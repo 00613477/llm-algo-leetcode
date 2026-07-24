@@ -10,9 +10,17 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把优化器状态切分和通信代价看清，再看 ZeRO 的分层策略会更容易理解显存优化的本质。
+---
+
+## 本节导读
+
+数据并行能把 batch 分到多张卡上计算，但它有一个明显浪费：每张卡都保存完整参数、完整梯度和完整优化器状态。模型一大，真正压垮显存的往往不是前向本身，而是这些训练状态在每张卡上的重复存储。
+
+ZeRO 的思路是把这些重复状态拆开，让不同 GPU 只维护自己负责的一部分。本节用一个简化模拟先看 ZeRO-1：优化器状态如何切分，Reduce-Scatter 和 All-Gather 分别解决什么问题。完成后，你应该能理解 ZeRO 为什么能降低单卡显存占用，也能把它和后面的 Pipeline / Tensor Parallelism 区分开。
 
 **关键词：** `ZeRO`, `Reduce-Scatter`, `All-Gather`
+
+---
 
 ## 前置阅读
 
@@ -25,12 +33,15 @@
 
 ## 相关阅读
 
-**导语：** ZeRO 后，建议继续看 Pipeline 和 Tensor Parallelism。
+**导语：** ZeRO 解决的是训练状态冗余；接下来可以继续看模型层切分和张量切分如何分摊计算与显存。
 
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA Stream 与异步执行](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
 - [P1: 26. Parallel Strategy Decision Framework | 并行策略决策框架](../01_Hardware_Math_and_Systems/26_Parallel_Strategy_Decision_Framework.md)
+- [28. Pipeline Parallelism MicroBatch | Pipeline 并行微批次](../02_PyTorch_Algorithms/28_Pipeline_Parallelism_MicroBatch.md)
+- [29. Tensor Parallelism Sim | Tensor 并行模拟](../02_PyTorch_Algorithms/29_Tensor_Parallelism_Sim.md)
 
+---
 ### Step 1: ZeRO-1 核心思想
 
 > **传统的 Data Parallel (DP，数据并行)：**
