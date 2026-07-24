@@ -35,8 +35,10 @@
 - [P1: 06. VRAM Calculation and ZeRO | 显存估算与 ZeRO](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
+
+---
 ### Step 1: 为什么需要梯度累积
-这一节先把“大 batch 更稳，但显存不够”这个矛盾说清楚。
+梯度累积要解决的核心矛盾是：大 batch 更稳定，但一次性放进显存往往放不下。
 
 > **大 batch 的好处**：梯度更稳定，更新方向更平滑。
 >
@@ -46,7 +48,7 @@
 > - 只要每个 micro-batch 的 loss 按 `accum_steps` 做缩放，最终效果就和一次性喂入大 batch 非常接近。
 
 ### Step 2: 数学等价性
-这里要抓住的重点不是公式本身，而是缩放和反传的顺序。
+重点不只是 loss 缩放公式，而是先缩放再反传，最后按累积步数统一更新。
 
 设一个完整 batch 被切成 `K` 个 micro-batch。若每个 micro-batch 的损失记为 `L_i`，则梯度累积相当于计算：
 
@@ -60,7 +62,7 @@ $$
 这也是为什么 `train_step_with_accumulation` 的实现要先缩放再反传。
 
 ### Step 3: 代码实现框架
-这一段把完整 batch 和累积 batch 的更新路径并排对齐。
+代码框架把完整 batch 和累积 batch 的更新路径并排对齐。
 
 下面我们实现两个更新步骤：
 - `train_step_full_batch`：一次性使用完整 batch 更新。
@@ -269,7 +271,7 @@ def train_step_with_accumulation(model, optimizer, x, y, accum_steps=4):
 
 - **切分逻辑：** 梯度累积不是一次喂完整 batch，而是先把 `x / y` 按 `accum_steps` 拆成多个 micro-batch。
 - **训练目标：** 每一轮循环都只处理当前片段，这样才能模拟大 batch 的效果，同时把峰值显存压低。
-- **实现重点：** 这里要先确定当前 micro-batch 的切片范围，再把输入和标签切出来。
+- **实现重点：** 先确定当前 micro-batch 的切片范围，再把输入和标签切出来。
 
 **2. TODO 2 (缩放 loss 并反传)**
 
@@ -287,4 +289,4 @@ def train_step_with_accumulation(model, optimizer, x, y, accum_steps=4):
 
 - **一致性检查：** 通过重复样本验证，可以确认梯度累积是否真的等价于完整 batch。
 - **工程价值：** 只要这套链路对齐，后续再切换更复杂的数据和更大的 batch 也更稳。
-- **实践意义：** 这一步把 `SFT Loss`、`梯度累积`、`参数更新` 连接成一个可运行的小闭环。
+- **实践意义：** 这条链路把 `SFT Loss`、`梯度累积`、`参数更新` 连接成一个可运行的小闭环。

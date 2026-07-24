@@ -35,8 +35,10 @@ WSD 把这个训练节奏拆成三段：先 warmup 把学习率抬起来，中�
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA 流与异步](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
+  
+---
 ### Step 1: 核心机制剖析
-这一节先把 Warmup、Stable 和 Decay 各自解决什么问题讲清楚，再落到代码分支。
+WSD 调度器把训练过程拆成 Warmup、Stable 和 Decay 三段，每一段对应一种不同的训练需求。
 
 > **为什么一定要有 Warmup (预热)？**
 > 1. **模型随机初始化**时，梯度非常大规模且方向混乱。如果直接给最大的学习率（如 3e-4），大规模的梯度更新会瞬间把模型权重冲飞 (Loss 直接 NaN)。
@@ -50,18 +52,18 @@ WSD 把这个训练节奏拆成三段：先 warmup 把学习率抬起来，中�
 >   3. **Decay (高效退火)**：只在训练的最后 10% 或 5% 阶段，用一个陡峭的函数（如线性或余弦）快速降到 0，让模型迅速收敛收拢。
 
 ### Step 2: WSD 调度器的数学曲线
-这一段先看清三段学习率曲线分别长什么样，再把它们翻译成代码判断。
+先看清三段学习率曲线分别长什么样，再把它们翻译成代码判断。
 Warmup-Stable-Decay (WSD) 是现代预训练（如 LLaMA-3）的标配。它的三个阶段是：
 1. **Warmup**: 学习率从 0 线性增长到最大值 $\eta_{max}$。
 2. **Stable**: 保持最大值 $\eta_{max}$ 训练绝大部分 Token（占整体的 70%~90%）。
 3. **Decay**: 在最后阶段（如退火阶段）使用余弦退火或线性衰减，将学习率迅速降至 $\eta_{min}$。这极大地帮助了模型在最后阶段收敛。后面的 `TODO 1-3` 就是在把这三段曲线翻译成代码分支。
 
 ### Step 3: 代码实现框架
-这一段把数学曲线翻译成 `get_lr()` 里的阶段判断。
+代码实现的核心，是把数学曲线翻译成 `get_lr()` 里的阶段判断。
 继承自 `torch.optim.lr_scheduler.LRScheduler`，你需要实现核心的 `get_lr()` 方法。在其中利用 `self.last_epoch` 判断当前步数处于哪一个阶段，然后根据上述的数学公式计算并返回此时的学习率数组。
 
 ###  Step 4: 动手实战
-这一段开始把三段曲线写成可运行的调度器。
+接下来把三段曲线写成可运行的调度器。
 
 **要求**：请补全下方 `WSD_Scheduler` 类。我们需要继承 PyTorch 原生的 `torch.optim.lr_scheduler.LRScheduler`，实现它的 `get_lr()` 方法。
 
