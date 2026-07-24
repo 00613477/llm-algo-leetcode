@@ -4,7 +4,7 @@
 
 本部分聚焦 PyTorch 级别的大模型实现，位于 Part 0 / Part 1 之后、Part 3 之前，目标是把基础算子、模型组装、训练与对齐、显存优化、推理优化、并行策略和项目实战串成一条可运行的工程链。正文默认 notebook-first，组页负责组级资产与阅读路径，Part 级导学只管组间关系和阅读顺序，不下沉到具体节号。
 
-后续会把 `2.7` 进一步拆成两条子线入口：`2.7A` 负责高级推理策略，`2.7B` 负责模型压缩与量化；当前先保留总入口页，等两条子线的模板和内容稳定后再决定是否整体重编号。
+`2.7` 已拆成两条子线入口：`2.7A` 负责高级推理策略，`2.7B` 负责模型压缩与量化；总入口页负责说明两条子线如何衔接到 `2.8` 并行通信和 `2.9` 项目验证。
 
 Part 2 更像一张多入口学习地图：不同基础和目标的读者可以从不同组切入，最后都汇到项目实战，再按需要回补前面的训练、推理和并行内容。
 
@@ -24,9 +24,9 @@ Part 2 更像一张多入口学习地图：不同基础和目标的读者可以�
 | [2.4](./2_4.md) | 理解偏好优化与对齐链路 | [14](./14_RLHF_PPO_Memory.ipynb)、[15](./15_DPO_Loss_Tutorial.ipynb)、[16](./16_GRPO_Loss_Tutorial.ipynb) | 3 |
 | [2.5](./2_5.md) | 追踪反向传播和显存优化 | [17](./17_Autograd_Basics.ipynb)、[18](./18_Activation_and_Loss_Backward.ipynb)、[19](./19_Activation_Checkpointing_and_Activation_Offload.ipynb) | 3 |
 | [2.6](./2_6.md) | 建立推理加速和缓存直觉 | [20](./20_FlashAttention_Sim.ipynb)、[21](./21_Decoding_Strategies.ipynb)、[22](./22_vLLM_PagedAttention.ipynb) | 3 |
-| [2.7](./2_7.md) | 2.7A 高级推理 / 2.7B 压缩量化双轨入口 | [23](./23_Speculative_Decoding.ipynb)、[24](./24_SGLang_RadixAttention.ipynb)、[25](./25_Quantization_W8A16.ipynb)、[26](./26_QLoRA_and_4bit_Quantization.ipynb) | 4 |
-| [2.8](./2_8.md) | 形成并行策略和通信边界判断 | [27](./27_ZeRO_Optimizer_Sim.ipynb)、[28](./28_Pipeline_Parallelism_MicroBatch.ipynb)、[29](./29_Tensor_Parallelism_Sim.ipynb) | 3 |
-| [2.9](./2_9.md) | 汇总项目验证和工程闭环 | [30](./30_LoRA_Fine_Tuning_Project.ipynb)、[31](./31_Inference_Performance_Comparison.ipynb)、[32](./32_Training_Performance_Analysis.ipynb) | 3 |
+| [2.7](./2_7.md) | 2.7A 高级推理 / 2.7B 压缩量化双轨入口，继续向 serving、cache 和量化家族扩展 | 核心：[23](./23_Speculative_Decoding.ipynb)、[24](./24_SGLang_RadixAttention.ipynb)、[25](./25_Quantization_W8A16.ipynb)、[26](./26_QLoRA_and_4bit_Quantization.ipynb)；扩展：[36](./36_Prefix_Caching_and_Chunked_Prefill.ipynb)、[37](./37_Multi_Token_Decoding.ipynb)、[38](./38_Decode_Scheduling.ipynb)、[39](./39_GPTQ_and_AWQ_Weight_Quantization.ipynb)、[40](./40_FP8_and_KV_Cache_Quantization.ipynb)、[41](./41_KV_Cache_Scheduling.ipynb) | 核心 4 + 扩展 6 |
+| [2.8](./2_8.md) | 形成并行策略和通信边界判断，并延伸到通信 profiling | 核心：[27](./27_ZeRO_Optimizer_Sim.ipynb)、[28](./28_Pipeline_Parallelism_MicroBatch.ipynb)、[29](./29_Tensor_Parallelism_Sim.ipynb)；扩展：[42](./42_Communication_Profiling_with_NCCL.ipynb) | 核心 3 + 扩展 1 |
+| [2.9](./2_9.md) | 汇总项目验证和工程闭环，承接训练 / 推理 / 系统 / 部署项目 | 核心：[30](./30_LoRA_Fine_Tuning_Project.ipynb)、[31](./31_Inference_Performance_Comparison.ipynb)、[32](./32_Training_Performance_Analysis.ipynb)；扩展：[33](./33_Profiling_Driven_End_to_End_Optimization.ipynb)、[34](./34_Distributed_Parallel_Benchmark.ipynb)、[35](./35_Quantized_Inference_and_Deployment.ipynb) | 核心 3 + 扩展 3 |
 
 ## Learning Path | 学习路径
 
