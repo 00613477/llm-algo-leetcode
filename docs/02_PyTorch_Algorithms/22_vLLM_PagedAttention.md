@@ -9,25 +9,38 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把 FlashAttention 和解码策略理顺，再看 PagedAttention 的分页式 KV 管理会更清楚。
+---
+
+## 本节导读
+
+在线推理服务里，请求不会整齐地一起开始、一起结束：有的 prompt 很短，有的上下文很长，有的很快生成完，有的还在继续 decode。如果仍然按最大长度给每个请求预留整块 KV Cache，显存会被大量浪费，GPU 也会因为静态 batch 里的空洞而等待。
+
+PagedAttention 的思路是把 KV Cache 像分页内存一样管理：物理显存切成固定大小的 block，每个请求只维护一张逻辑到物理的 block table。prefill 时按需申请，decode 跨块时再补新 block，真正计算时再按表拼回逻辑连续的缓存。本节会用一个简化管理器模拟这条链路，看清 vLLM 为什么能支撑高吞吐在线 serving。
 
 **关键词：** `PagedAttention`, `KV cache`, `block table`
 
+---
+
 ## 前置阅读
 
-**导语：** 先把 FlashAttention、解码策略和显存账本看过，再看 PagedAttention 会更清楚。
+**导语：** 先理解解码策略、KV Cache 增长和显存账本，再看 PagedAttention 会更清楚：本节关注的不是 attention 公式本身，而是在线服务里如何管理不断增长的缓存。
 
 - [20. FlashAttention Sim | FlashAttention 模拟](../02_PyTorch_Algorithms/20_FlashAttention_Sim.md)
 - [21. Decoding Strategies | 解码策略](../02_PyTorch_Algorithms/21_Decoding_Strategies.md)
+- [P1: 11. KV Cache and Memory Growth | KV Cache 与显存增长](../01_Hardware_Math_and_Systems/11_KV_Cache_and_Memory_Growth.md)
 - [P0: 20. Profiling and Memory Ledger | 性能剖析与显存账本](../00_Prerequisites/20_Profiling_and_Memory_Ledger.md)
 
 
 ## 相关阅读
 
-**导语：** PagedAttention 后，可以继续看投机解码和量化。
+**导语：** PagedAttention 解决 KV Cache 的按块管理问题，后面可以继续看投机解码、前缀复用和 profiling，理解推理系统如何继续减少等待和重算。
 
+- [23. Speculative Decoding | 投机解码](./23_Speculative_Decoding.md)
+- [24. SGLang RadixAttention | SGLang 基数注意力](./24_SGLang_RadixAttention.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 14. FlashAttention Memory Model | FlashAttention 显存模型](../01_Hardware_Math_and_Systems/14_FlashAttention_Memory_Model.md)
+
+---
 
 ### Step 1: 核心思想与痛点
 

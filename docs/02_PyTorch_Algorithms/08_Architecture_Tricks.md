@@ -10,14 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在 `05_LLaMA3_Block_Tutorial` 中我们搭建了 LLaMA 的骨架。但如果你去面试阿里云（通义千问团队）或者谷歌，他们必然会问自家模型与 LLaMA 的区别。
-本节我们将以“打补丁”的方式，在 PyTorch 中快速实现 **Qwen 的 Tie Word Embeddings** 以及 **Gemma 的 +1 缩放 RMSNorm**。
-可以先把这两个 trick 记成：一个是输入和输出层共享同一份词表参数，另一个是在归一化缩放上加一个更平滑的偏移。
+---
+
+## 本节导读
+
+搭完 LLaMA 风格的 Decoder Layer 以后，你会发现不同开源模型的主干很像，但并不完全一样。很多差异不是重新设计整套架构，而是在参数共享、归一化缩放或初始化方式上做小改动；这些小改动会影响参数量、梯度流向和训练早期稳定性。
+
+本节选两个典型 architecture tricks 做最小实现：Qwen / GPT 系常见的 Tie Word Embeddings，以及 Gemma 风格的 `1 + w` RMSNorm 缩放。完成后，你应该能看懂这些“看起来很小”的结构差异为什么值得单独讨论，并能在阅读不同模型代码时快速定位它们改变了哪条参数或梯度路径。
 
 **关键词：** `Qwen`, `Gemma`, `Tie Embeddings`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把 Block、Router 和负载均衡主线理顺，先看下面几页再进入结构变体会更顺。
+**导语：** 先把 RMSNorm、Decoder Layer 和 `nn.Module` 封装理顺，再看结构变体会更容易对应到代码位置。
 
 - [01. RMSNorm Tutorial | RMSNorm 教程](../02_PyTorch_Algorithms/01_RMSNorm_Tutorial.md)
 - [05. LLaMA3 Block Tutorial | LLaMA3 Block 教程](../02_PyTorch_Algorithms/05_LLaMA3_Block_Tutorial.md)
@@ -26,12 +32,15 @@
 
 ## 相关阅读
 
-**导语：** 本节先把结构变体讲清楚；如果想继续看训练与微调主线，再顺着看后面的页面。
+**导语：** 理解结构 trick 后，可以继续进入训练技巧与微调主线，也可以从硬件和编译角度看这些结构如何被高效执行。
 
+- [10. LoRA Tutorial | LoRA 教程](../02_PyTorch_Algorithms/10_LoRA_Tutorial.md)
+- [11. LR Schedulers WSD Cosine | WSD 余弦学习率调度器](../02_PyTorch_Algorithms/11_LR_Schedulers_WSD_Cosine.md)
 - [P1: 12. TensorCore and Mixed Precision | Tensor Core 与混合精度](../01_Hardware_Math_and_Systems/12_TensorCore_and_Mixed_Precision.md)
 - [P1: 08. Programming Models CUDA Triton | 编程模型演进](../01_Hardware_Math_and_Systems/08_Programming_Models_CUDA_Triton.md)
 - [P1: 09. AI Compilers and Graph Optimization | AI 编译器与计算图优化](../01_Hardware_Math_and_Systems/09_AI_Compilers_and_Graph_Optimization.md)
 
+---
 ### Step 1: 核心差异与机制
 
 本节对比 Qwen 和 Gemma 在架构设计上的两项关键改动及其设计动机。
@@ -119,7 +128,7 @@ class GemmaRMSNorm(nn.Module):
         # Gemma 公式: output = normalized * (1 + weight)
         # 注意: weight 初始为 0，确保类型转换回 x.dtype
         # ==========================================
-        output = x_norm * (1 + self.weight)
+        # output = ？？
         return output.type_as(x)
         
 
@@ -239,6 +248,9 @@ def test_tricks():
     except AssertionError as e:
         print(f"❌ 测试失败: {e}")
         raise
+    except NameError as e:
+        print("代码可能未完成，导致变量未定义")
+        raise NotImplementedError("请先完成 TODO 代码！") from e
     except Exception as e:
         print(f"❌ 发生未知异常: {e}")
         raise

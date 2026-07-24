@@ -10,13 +10,21 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-这页把激活函数和损失函数的反向推导串成一条线：先看梯度如何穿过中间非线性，再看损失如何把训练信号送回前面层。
+---
+
+## 本节导读
+
+上一节已经把 Attention 的反向路径拆开了，但一次训练能不能稳定更新，不只取决于大矩阵乘法的梯度。梯度还要穿过激活函数，也要从损失函数那里拿到最初的训练信号；这两个环节如果理解不清，很多“模型不学习”“梯度为 0”“loss 对不上”的问题都很难定位。
+
+本节把反向链路的两个关键位置补齐：中间的 ReLU 像一道门，决定哪些位置的上游梯度可以继续传；末端的交叉熵把分类误差变成 logits 上的梯度，给整条反向传播提供起点。完成后，你应该能手写最小版 ReLU backward，核对交叉熵梯度和 PyTorch 自动求导是否一致，并把“loss 变小”这件事和具体张量上的梯度流动联系起来。
 
 **关键词：** `activation`, `loss`, `gradients`
 
+---
+
 ## 前置阅读
 
-**导语：** 先把 Autograd 和训练闭环的基础补齐，再看激活函数和损失函数的反向推导会更顺。
+**导语：** 先理解 Autograd、训练循环和显存账本，再看激活与损失的反向路径会更容易把公式和工程现象对应起来。
 
 - [P0: 07. PyTorch Autograd and Backward | PyTorch 自动求导与反向传播](../00_Prerequisites/07_PyTorch_Autograd_and_Backward.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
@@ -25,12 +33,13 @@
 
 ## 相关阅读
 
-**导语：** 完成反向推导后，建议继续看激活检查点和 FlashAttention 模拟。
+**导语：** 理解梯度穿过激活和损失之后，可以继续看训练时如何用检查点省显存，以及 Attention 反向相关的性能优化。
 
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [19. Activation Checkpointing and Activation Offload | 激活检查点与激活卸载](../02_PyTorch_Algorithms/19_Activation_Checkpointing_and_Activation_Offload.md)
 - [20. FlashAttention Sim | FlashAttention 模拟](../02_PyTorch_Algorithms/20_FlashAttention_Sim.md)
 
+---
 ### Step 1: 激活函数的反向传播
 
 激活函数的反向传播通常不是大矩阵运算，而是一个**逐元素门控**过程。以 ReLU 为例，前向是 `y = max(0, x)`，反向时只要把上游梯度乘上一个布尔掩码即可：

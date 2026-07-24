@@ -10,25 +10,35 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-DPO 通过更轻的偏好学习路径，把 RLHF 的复杂训练闭环收敛成一个更容易实现的损失函数。先看清它如何把偏好比较转成 log prob 差，再去看代码会更顺。
+---
+
+## 本节导读
+
+RLHF 能把模型往人类偏好方向拉，但 PPO 训练链路很重：要维护策略模型、参考模型、奖励模型和价值模型，还要处理采样、打分和策略更新的稳定性问题。
+
+DPO 的切入点更直接：既然偏好数据本身已经告诉我们“哪个回答更好”，就把 chosen / rejected 的对比关系写成一个可优化的损失函数，让策略模型相对参考模型更偏向 chosen。本节只实现 DPO Loss 的核心计算。完成后，你应该能看懂它如何把偏好比较转成 log probability 的差值，并理解为什么 DPO 是从复杂 RLHF 训练闭环到轻量偏好优化的重要过渡。
 
 **关键词：** `DPO`, `preference`, `loss`
+
+---
 ## 前置阅读
 
-**导语：** 先把训练接口和损失函数基础补齐，再看 DPO 的隐式对齐路线会更顺。
+**导语：** 先补齐训练接口、损失函数和 RLHF/PPO 的系统开销，再看 DPO 为什么要把偏好优化收敛成一个更轻的 loss。
 
 - [P0: 11. PyTorch Optimizers and Loss | PyTorch 优化器与损失函数](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 12. PyTorch Minimal Training Interface | PyTorch 最小训练接口](../00_Prerequisites/12_PyTorch_Minimal_Training_Interface.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
+- [14. RLHF PPO Memory | RLHF/PPO 显存拆解](../02_PyTorch_Algorithms/14_RLHF_PPO_Memory.md)
 
 
 ## 相关阅读
 
-**导语：** 完成 DPO 后，可以继续把训练系统视角和通信 / 性能链路一起看。
+**导语：** 完成 DPO 后，可以继续看组内相对优化、训练系统开销和分布式通信对对齐训练的影响。
 
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO 优化](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
+- [16. GRPO Loss Tutorial | 群体相对策略优化损失教程](../02_PyTorch_Algorithms/16_GRPO_Loss_Tutorial.md)
 
 ### Step 1: 核心思想与痛点
 

@@ -9,14 +9,21 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把反向传播后的显存压力和前向计算路径看清，再进入 FlashAttention 的前向模拟会更顺。
+---
+
+## 本节导读
+
+上下文变长以后，Attention 的问题不只是矩阵乘法变大，更麻烦的是中间的 attention score 矩阵会按序列长度平方增长。标准实现往往要把整块 `QK^T` 写到显存再读回来做 softmax 和加权求和，计算还没结束，显存和带宽就已经被中间结果拖住。
+
+FlashAttention 的思路是不要把完整 score 矩阵落到显存里，而是把 Q/K/V 分块，在小块上边算边更新 softmax 统计量和输出。本节用纯 PyTorch 模拟这条前向路径：通过 online softmax 和 tiling 看清它为什么能在数学等价的前提下降低显存读写。
 
 **关键词：** `FlashAttention`, `online softmax`, `tiling`
 
+---
 
 ## 前置阅读
 
-**导语：** 先理解 GPU 内存层级、混合精度和显存分析，再看 FlashAttention 的前向模拟会更容易。
+**导语：** 先理解 Attention 的显存增长、GPU 内存层级和 profiling 视角，再看 FlashAttention 会更顺：本节关注的是如何避免把巨大的中间 score 矩阵反复写入和读出显存。
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 12. TensorCore and Mixed Precision | Tensor Core 与混合精度](../01_Hardware_Math_and_Systems/12_TensorCore_and_Mixed_Precision.md)
 - [13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
@@ -24,10 +31,13 @@
 
 ## 相关阅读
 
-**导语：** FlashAttention 后，可以继续看注意力显存优化、KV Cache 和算子融合。
+**导语：** FlashAttention 解决的是单次 attention 计算中的显存读写问题；后面可以继续看 KV Cache、PagedAttention 和算子融合，理解长上下文推理的缓存和系统瓶颈。
 - [P1: 04. Attention Variants and Memory Optimization | 注意力机制变体与显存优化](../01_Hardware_Math_and_Systems/04_Attention_Memory_Optimization.md)
 - [P1: 11. KV Cache and Memory Growth | KV Cache 与显存增长](../01_Hardware_Math_and_Systems/11_KV_Cache_and_Memory_Growth.md)
+- [22. vLLM PagedAttention | vLLM 分页注意力](./22_vLLM_PagedAttention.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
+
+---
 
 ### Step 1: 核心理论与 Online Softmax
 

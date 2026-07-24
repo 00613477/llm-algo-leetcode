@@ -10,27 +10,37 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把张量切分和通信模式理清，再看 Column / Row Parallelism 的组合关系会更容易理解张量并行。
+---
+
+## 本节导读
+
+ZeRO 主要切训练状态，Pipeline 主要切模型层；但很多大模型里的单个 Linear 本身就很大，即使按层切完，某一层的矩阵乘法仍可能成为显存和计算瓶颈。这时需要把一个权重矩阵沿维度拆到多张卡上共同计算。
+
+Tensor Parallelism 的核心就是按张量维度切分 Linear：Column Parallel 切输出维度，通常需要 All-Gather；Row Parallel 切输入维度，通常需要 All-Reduce。本节用纯 PyTorch 模拟这两种切法，重点看清切分方向、局部输出和通信模式如何对应。完成后，你应该能区分 ZeRO、Pipeline 和 Tensor Parallelism 各自“切的对象”是什么。
 
 **关键词：** `Tensor Parallelism`, `Column Parallel`, `Row Parallel`
+
+---
 
 ## 前置阅读
 
 **导语：** 先看 ZeRO、Pipeline 并行和并行策略框架，再看 Tensor Parallelism 会更容易把三种并行策略区分开。
 
-- [27. ZeRO Optimizer Sim | ZeRO 优化器模拟](./27_ZeRO_Optimizer_Sim.md)
-- [28. Pipeline Parallelism MicroBatch | Pipeline 并行微批次](./28_Pipeline_Parallelism_MicroBatch.md)
+- [27. ZeRO Optimizer Sim | ZeRO 优化器模拟](../02_PyTorch_Algorithms/27_ZeRO_Optimizer_Sim.md)
+- [28. Pipeline Parallelism MicroBatch | Pipeline 并行微批次](../02_PyTorch_Algorithms/28_Pipeline_Parallelism_MicroBatch.md)
 - [P1: 26. Parallel Strategy Decision Framework | 并行策略决策框架](../01_Hardware_Math_and_Systems/26_Parallel_Strategy_Decision_Framework.md)
 
 
 ## 相关阅读
 
-**导语：** 并行策略看完后，就可以进入项目实战页做综合收口。
+**导语：** 并行策略看完后，可以继续从通信调度和项目页做综合收口。
 
 - [P1: 17. CUDA Stream and Asynchrony | CUDA Stream 与异步执行](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
 - [P1: 27. Communication Scheduling Optimization | 通信调度优化](../01_Hardware_Math_and_Systems/27_Communication_Scheduling_Optimization.md)
 - [P1: 08. Programming Models and CUDA/Triton | 编程模型演进](../01_Hardware_Math_and_Systems/08_Programming_Models_CUDA_Triton.md)
+- [35. Multi-GPU Strategy Selection Project | 多卡策略选择项目](../02_PyTorch_Algorithms/35_Multi_GPU_Strategy_Selection_Project.md)
 
+---
 ### Step 1: TP的两种切法
 
 假设输入 $X$ 形状为 `(batch, in_dim)`，权重 $A$ 形状为 `(in_dim, out_dim)`，经过线性层变为 $Y = XA$，形状 `(batch, out_dim)`。

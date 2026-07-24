@@ -10,12 +10,17 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在深入大模型的浩瀚海洋（如 Attention、LoRA、MoE）之前，我们必须确保自己的“底层积木”是非常扎实的。
-本节作为**热身关卡**，将用三个非常经典的实战填空，带你快速找回 PyTorch 的核心肌肉记忆：张量维度变换 (Tensor Reshaping)、嵌入层查表 (Embedding Lookup) 以及链式法则的反向传播 (Backpropagation)。
-如果你对 Transformer 还不熟，可以先把几个词记成最小概念：`token id` 是离散编号，`embedding` 是把编号查表成向量的层，`hidden dim` 是这个向量的长度，`sequence` 则是把一串 token 组成的输入。
-本页不重复展开前置概念，而是把这些知识直接落到可运行、可验证的练习里，重点看清每一步代码为什么这么写。
+---
+
+## 本节导读
+
+进入 Part 02 后，我们不再只讨论概念，而是要把大模型里的模块真正写成 PyTorch 代码。最先需要补齐的不是某个复杂算法，而是三类基本动作：张量维度能不能对上，token id 能不能查成向量，loss 的梯度能不能顺利传回参数。
+
+本节是这一部分的热身关卡，会用三个小练习重新建立 PyTorch 的实现手感：reshape、embedding lookup 和最小反向传播。完成后，你应该能更顺畅地进入 RMSNorm、SwiGLU、RoPE 和 Attention 这些核心组件实现，不会被基础张量操作打断主线。
 
 **关键词：** `reshape`, `Embedding`, `backpropagation`
+
+---
 ## 前置阅读
 
 **导语：** 这一节先把后续章节要用到的基础张量、Autograd 和训练接口先补齐。
@@ -31,15 +36,7 @@
 - [P1: 01. Data Types and Precision | 大模型的数据格式与混合精度](../01_Hardware_Math_and_Systems/01_Data_Types_and_Precision.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 
-
-```python
-# 导入所有必需的库
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import einops
-```
-
+---
 ### Part 1: 张量维度变换与 `einops`
 
 无论是注意力里的多头合并，还是各种特征整理，都会反复用到张量形状重排同一类操作。
@@ -53,6 +50,15 @@ import einops
 > - **`einops` 实现**：`rearrange(x, 'b h s d -> b s (h d)')` —— 维度变换的语义直接写在字符串中，代码即文档（Self-documenting）。
 >
 > 这正是为什么现代深度学习框架和开源模型广泛拥抱 **`einops`** 库，它能让复杂的张量操作变得语义清晰、安全可防错。
+
+```python
+# 导入所有必需的库
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import einops
+```
+
 
 ```python
 def tensor_warmup(x: torch.Tensor):

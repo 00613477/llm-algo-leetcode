@@ -10,55 +10,72 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-这一页把前面的训练要素串起来：数据构造、SFT Loss、梯度累积和参数更新。目标不是造一个大而全的框架，而是搭一个最小但完整的微调闭环，让你能把输入构造、loss 对齐和参数更新真正对上。可以先把它记成：先拼样本，再算 loss，最后走完整个更新链路。
+---
+
+## 本节导读
+
+前面的小节已经分别讲过模型封装、优化器、损失函数和梯度累积，但真实微调不是把这些概念单独跑通就结束。只要数据构造、label 对齐、loss 计算或参数更新里有一个环节接错，训练就会表现成 loss 不降、shape 对不上，或者看似运行但模型没有真正学习。
+
+本节把这些训练要素收成一个最小端到端 SFT 实验：先构造 prompt / response 样本，再计算自回归 loss，最后走完 backward、梯度累积和 optimizer step。完成后，你应该能用一个小模型验证完整微调闭环是否跑通，也能为后面的 LoRA 项目、RLHF/PPO 和训练性能分析建立统一基线。
 
 **关键词：** `end-to-end`, `fine-tuning`, `loop`
+
+---
 ## 前置阅读
 
-**导语：** 先把模型封装、LoRA 适配、优化器、梯度累积和最小训练闭环看过，再做端到端微调实验最顺。
+**导语：** 先把模型封装、LoRA 适配、优化器、梯度累积和最小训练接口看过，再做端到端微调实验最顺。
 - [P0: 09. PyTorch nn.Module Basics | PyTorch nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
 - [10. LoRA Tutorial | LoRA 教程](../02_PyTorch_Algorithms/10_LoRA_Tutorial.md)
 - [P0: 11. PyTorch Optimizers and Loss | PyTorch 优化器与损失](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
-- [P0: 12. Gradient Accumulation | 梯度累积](../00_Prerequisites/12_Gradient_Accumulation.md)
+- [P0: 12. PyTorch Minimal Training Interface | PyTorch 最小训练接口](../00_Prerequisites/12_PyTorch_Minimal_Training_Interface.md)
 
 ## 相关阅读
 
-**导语：** 完成训练收束后，可以继续进入显存、并行和性能分析相关的小节。
+**导语：** 完成最小 SFT 闭环后，可以继续看对齐训练的显存压力、LoRA 项目化落地和训练性能分析。
+- [14. RLHF PPO Memory | RLHF 与 PPO 显存占用与流转](../02_PyTorch_Algorithms/14_RLHF_PPO_Memory.md)
+- [30. LoRA Fine-Tuning Project | LoRA 微调项目](../02_PyTorch_Algorithms/30_LoRA_Fine_Tuning_Project.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
 
+---
 ### Step 1: 端到端训练闭环长什么样
-这一节先把数据、模型、loss 和优化器四层怎么接起来说清楚。
+端到端微调实验的核心，是把数据、模型、loss 和优化器四层接成一个可运行闭环。
 
 一个完整的微调实验通常包含四层：
-1. **数据层**：把 prompt / response 整理成 `input_ids` 和 `labels`。
-2. **模型层**：输入 token，输出每个位置的 logits。
+1. **数据层**：将 prompt/response 构造为 tokenized batch（input_ids + labels），并进行 padding 对齐，作为模型的直接输入。
+2. **模型层**：输入 token 经过 embedding → Transformer → LM head，输出每个位置的 logits。
 3. **优化层**：计算 SFT loss，执行 backward、step 和 zero_grad。
-4. **调度层**：可选地叠加学习率调度器和梯度累积。
+4. **训练控制层**：控制梯度累积、参数更新频率和 loss 记录。
 
-这节更像 `00-12` 的阶段性项目收口页：我们用一个极小的语言模型，把这些步骤串成一个可训练的闭环。后面的 `TODO 1-3` 会分别把这四层拆开实现，再重新合回一个训练闭环。
+这一页承担 `00-12` 的阶段性项目收口：用一个极小语言模型，把前面的训练组件串成完整闭环。后面的 `TODO 1-3` 会分别把这四层拆开实现，再重新合回一个训练闭环。
 
 ### Step 2: 为什么要把它做成实验
-这一段先说明为什么要把单点函数串成完整实验，再进入代码。
+先说明为什么要把单点函数串成完整实验，再进入代码。
 
-如果只会单点函数，很容易在面试或真实项目里出现“会公式，不会落地”的问题。端到端实验的价值在于：
-- 你能确认数据、模型、loss、优化器之间的接口是对的。
+如果只会单点函数，很容易在真实项目里出现“会公式，不会落地”的问题。端到端实验的价值在于——从确认接口正确，到观察训练收敛，再到快速定位问题，最后用极端测试验证闭环：
+- 你能确认数据、模型、loss、优化器之间的接口是对的。（例如：模型的输出 shape 是否匹配 loss 函数的输入 shape？优化器的参数是否真的被更新了？）。
 - 你能观察训练 loss 是否真的下降。
 - 你能快速定位是数据问题、loss 问题，还是优化器问题。
+- 你能通过"重复样本过拟合测试"快速验证闭环是否跑通：如果模型在重复样本上 loss 能显著下降，说明数据、loss、优化器链路完整；如果 loss 不降，说明链路中有环节断裂。
 
 ### Step 3: 代码实现框架
-这一段把三个 TODO 对应到三步闭环：构造样本、计算损失、执行训练更新。
 
-下面会实现三个函数：
-- `build_sft_batch`：构造一批 SFT 样本。
-- `TinyCausalLM`：一个很小的自回归模型。
-- `run_finetuning_experiment`：把数据、loss、梯度累积和参数更新串起来。
-这三块正好对应后面的 `TODO 1 / TODO 2 / TODO 3`。
+本实验的模型层（TinyCausalLM）已直接给出，无需修改。它是一个极小的自回归模型（embedding → GRU → LM head），参数规模极小，便于快速验证闭环。
+三个 TODO 与训练闭环的对应关系如下：
+- TODO 1 → 数据构造（build_sft_batch）
+- TODO 2 → 损失计算（compute_sft_loss）
+- TODO 3 → 训练更新（run_finetuning_experiment：backward、梯度累积、optimizer step）
+- 模型层 → TinyCausalLM 已给出，用于验证闭环，不作为 TODO
+
+下面会实现三块代码：
+- `build_sft_batch`：将原始 prompt/response 转为 tokenized batch（返回 input_ids、labels），作为模型的直接输入。
+- `compute_sft_loss`：完成 next-token 对齐并计算 SFT loss。
+- `run_finetuning_experiment`：驱动训练循环，包含 loss 计算、反向传播、梯度累积和参数更新，返回每步 loss 记录用于观察收敛。
+- `TinyCausalLM`：已给出的极小自回归模型，用于验证闭环，不追求下游任务效果。
 
 
 ```python
-import copy
 import torch
 import torch.nn as nn
 
@@ -70,7 +87,8 @@ def build_sft_batch(prompt_ids, response_ids, pad_id=0, max_len=10):
     # ==========================================
     # 先拼接 prompt 和 response，再决定哪些位置参与监督。
     # TODO 1: 构造 SFT 样本
-    # 提示: prompt 部分的 labels 需要 mask 成 -100，response 部分保留原标签
+    # 提示: prompt 部分的 labels mask 为 -100，response 部分保留
+    # 注意: 超长时直接从开头截断（本实验数据较短，暂不处理复杂截断）
     # ==========================================
     # input_ids = ???
     # labels = ???
@@ -102,9 +120,10 @@ class TinyCausalLM(nn.Module):
 
 def compute_sft_loss(logits, labels):
     # ==========================================
-    # 先把时间步错一位，再做 token 级分类损失。
     # TODO 2: 对齐 next-token 预测并计算 SFT loss
-    # 提示: 先 shift logits / labels，再用 CrossEntropyLoss(ignore_index=-100)
+    # 提示: logits 取前 t-1 个位置，labels 取后 t-1 个位置
+    #       (position t 的 logits 预测 position t+1 的 token)
+    #       使用 CrossEntropyLoss(ignore_index=-100)
     # ==========================================
     # shift_logits = ???
     # shift_labels = ???
@@ -211,10 +230,11 @@ test_end_to_end_finetuning()
 import torch
 import torch.nn as nn
 
-
 def build_sft_batch(prompt_ids, response_ids, pad_id=0, max_len=10):
     # 先拼接 prompt 和 response，再决定哪些位置参与监督。
     # TODO 1: 构造 SFT 样本
+    # 提示: prompt 部分的 labels mask 为 -100，response 部分保留
+    # 注意: 超长时直接从开头截断（本实验数据较短，暂不处理复杂截断）
     input_ids = prompt_ids + response_ids
     labels = [-100] * len(prompt_ids) + response_ids
 
@@ -246,15 +266,20 @@ class TinyCausalLM(nn.Module):
 def compute_sft_loss(logits, labels):
     # 先把时间步错一位，再做 token 级分类损失。
     # TODO 2: 对齐 next-token 预测并计算 SFT loss
+    # 提示: logits 取前 t-1 个位置，labels 取后 t-1 个位置
+    #       (position t 的 logits 预测 position t+1 的 token)
+    #       使用 CrossEntropyLoss(ignore_index=-100)
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
     loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-    return loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    return loss
 
 
 def run_finetuning_experiment(model, optimizer, input_ids, labels, accum_steps=2, num_updates=40):
     # 先按 micro-batch 跑 forward/backward，最后统一 step。
     # TODO 3: 端到端训练闭环
+    # 提示: 切 micro-batch -> 缩放 loss 并 backward -> 最后 step / zero_grad / 返回 history
     if input_ids.size(0) % accum_steps != 0:
         raise ValueError("batch size 必须能被 accum_steps 整除")
 
@@ -310,5 +335,5 @@ def run_finetuning_experiment(model, optimizer, input_ids, labels, accum_steps=2
 **进阶思考：为什么要做重复样本验证？**
 
 - **一致性检查：** 通过重复样本验证，可以确认梯度累积是否真的等价于完整 batch。
-- **闭环意义：** 这一步把 `SFT Loss`、`梯度累积`、`参数更新` 连接成一个可运行的小闭环。
+- **闭环意义：** 这条链路把 `SFT Loss`、`梯度累积`、`参数更新` 连接成一个可运行的小闭环。
 - **工程价值：** 只要这套链路对齐，后续再切换更复杂的数据和更大的 batch 也更稳。

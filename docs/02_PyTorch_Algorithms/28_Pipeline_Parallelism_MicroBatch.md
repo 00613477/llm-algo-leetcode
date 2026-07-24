@@ -10,25 +10,33 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把流水线分段和微批次调度的关系理清，再看 1F1B 的气泡分析会更顺。
+---
+
+## 本节导读
+
+当单张 GPU 放不下完整模型时，一个直接想法是按层把模型切到多张卡上。但层切分之后，如果还是让一个完整 batch 从第一段一路跑到最后一段，很多 GPU 会在等待上游或下游，形成流水线空泡。
+
+Pipeline Parallelism 的关键是把 batch 再拆成多个 micro-batch，让不同 stage 尽量同时工作。本节用一个简化时间轴模拟 1F1B 调度，重点看清 stage 数、micro-batch 数和 bubble ratio 的关系。完成后，你应该能理解流水线并行为什么不是“切层就完事”，而是必须和调度策略一起设计。
 
 **关键词：** `Pipeline Parallelism`, `Micro-batch`, `bubble ratio`
+
+---
 
 ## 前置阅读
 
 **导语：** 先看并行策略框架和通信拓扑，再看 Pipeline 的微批次调度会更容易理解流水线并行。
-- [26. Parallel Strategy Decision Framework | 并行策略决策框架](./26_Parallel_Strategy_Decision_Framework.md)
+- [P1: 26. Parallel Strategy Decision Framework | 并行策略决策框架](../01_Hardware_Math_and_Systems/26_Parallel_Strategy_Decision_Framework.md)
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 
 ## 相关阅读
 
 **导语：** Pipeline 之后，建议继续看 ZeRO、Tensor Parallelism、异步调度和项目实战。
-- [27. ZeRO Optimizer Sim | ZeRO 优化器模拟](./27_ZeRO_Optimizer_Sim.md)
+- [27. ZeRO Optimizer Sim | ZeRO 优化器模拟](../02_PyTorch_Algorithms/27_ZeRO_Optimizer_Sim.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA Stream 与异步执行](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
-- [29. Tensor Parallelism Sim | Tensor 并行模拟](./29_Tensor_Parallelism_Sim.md)
-- [30. LoRA Fine-Tuning Project | LoRA 微调项目](./30_LoRA_Fine_Tuning_Project.md)
+- [29. Tensor Parallelism Sim | Tensor 并行模拟](../02_PyTorch_Algorithms/29_Tensor_Parallelism_Sim.md)
+- [30. LoRA Fine-Tuning Project | LoRA 微调项目](../02_PyTorch_Algorithms/30_LoRA_Fine_Tuning_Project.md)
 
-
+---
 ### Step 1: 为什么会有 Bubble
 
 **核心手段：微批次 (Micro-batch)**

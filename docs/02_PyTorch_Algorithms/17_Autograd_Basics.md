@@ -10,12 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把 Attention 前向、链式法则和 PyTorch Autograd 的回传关系串起来，再去看激活函数和损失函数的反向，推导会更顺。
+---
+
+## 本节导读
+
+写完 Attention 前向以后，模型虽然能算出输出，但训练时还要回答另一个问题：损失的梯度到底怎样回到 $Q$、$K$、$V$？如果只是调用 `loss.backward()`，这条路径会被 PyTorch 自动处理；但一旦要写自定义算子、排查梯度异常，或者理解后面 FlashAttention 的反向传播，就必须把这条链路拆开看。
+
+本节不从 Autograd 的概念定义讲起，而是沿着一个简化版 Attention 反向走一遍：输出梯度先回到 $V$ 和注意力概率 $P$，再穿过 Softmax 回到打分矩阵 $S$，最后回到 $Q$ 和 $K$。完成后，你应该能把 Attention backward 的关键公式写进 `torch.autograd.Function`，理解为什么前向要保存中间张量，并用 PyTorch 自动求导结果校验手写梯度是否正确。
 
 **关键词：** `Autograd`, `backward`, `gradcheck`
+
+---
 ## 前置阅读
 
-**导语：** 先把 Autograd 的反向传播路径补齐，再回到自定义反传实现会更顺。
+**导语：** 先理解 PyTorch 如何记录计算图、如何执行训练循环，再进入手写 Attention backward 会更顺。
 
 - [P0: 07. PyTorch Autograd and Backward | PyTorch 自动求导与反向传播](../00_Prerequisites/07_PyTorch_Autograd_and_Backward.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
@@ -23,10 +31,12 @@
 
 ## 相关阅读
 
-**导语：** 自定义反传之后，最自然的延伸就是激活函数和损失函数的反向推导。
+**导语：** 手写 Attention backward 之后，可以继续看梯度如何穿过激活函数、损失函数，以及性能分析里如何定位反向算子的开销。
 
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [18. Activation and Loss Backward | 激活函数与损失反向传播](../02_PyTorch_Algorithms/18_Activation_and_Loss_Backward.md)
+
+---
 
 ### Step 1: 前向传播回顾与变量定义
 

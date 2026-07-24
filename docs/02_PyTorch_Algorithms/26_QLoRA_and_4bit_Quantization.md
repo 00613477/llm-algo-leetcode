@@ -10,46 +10,85 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-QLoRA 是 2023-2024 年微调界最具重要的论文。它通过引入 **4-bit NormalFloat (NF4)** 数据类型和 **双重量化 (Double Quantization)**，让算法工程师在一张非常廉价的 24GB 显卡上微调高达 33B 的大语言模型成为了现实。
-本节我们将实现模拟 QLoRA 的训练过程：冻结低精度的基础权重，在计算前向/反向时动态反量化，只更新高精度的 LoRA 参数。
+---
+
+## 本节导读
+
+第 25 节已经说明：只压权重，就能明显降低显存和读取压力。但微调大模型时，问题会更尖锐：底座模型很大，训练又需要额外保存梯度和优化器状态，单靠 8-bit 还不够省。QLoRA 继续往前走一步：把底座尽量压到 4-bit，同时把学习能力留给一条很小的可训练旁路。
+
+这一节不复现工业库里的高性能内核，而是用纯 PyTorch 搭一个教学模拟：低精度基础权重负责存储和前向，高精度 LoRA 旁路负责训练更新。学完后，你应该能看清“底座压缩、旁路训练、计算前还原”这条主线，再理解真实 QLoRA 为什么能把大模型微调的显存门槛大幅压低。
 
 **关键词：** `QLoRA`, `NF4`, `LoRA`
 
+---
+
 ## 前置阅读
 
-**导语：** 这一节先把显存、量化和低秩适配的基础概念补齐，再看 QLoRA 会更顺。
+**导语：** 这一节同时承接量化和微调两条线：先理解为什么要压缩底座权重，再理解为什么只训练 LoRA 旁路。
+- [10. LoRA Tutorial | LoRA 教程](./10_LoRA_Tutorial.md)
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](./13_End_to_End_Fine_Tuning_Experiment.md)
+- [25. Quantization W8A16 | W8A16 量化](./25_Quantization_W8A16.md)
 - [P1: 21. Quantization Theory and INT4/INT8 | 量化理论与 INT4/INT8](../01_Hardware_Math_and_Systems/21_Quantization_Theory_and_INT4_INT8.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO 优化](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 12. TensorCore and Mixed Precision | Tensor Core 与混合精度](../01_Hardware_Math_and_Systems/12_TensorCore_and_Mixed_Precision.md)
 
 ## 相关阅读
 
-**导语：** 如果你想继续往 Triton 量化和多租户 LoRA 路由延伸，可以接着看这些页面。
+**导语：** 学完 QLoRA 后，可以继续沿项目线看 LoRA 微调如何交付，也可以沿部署线看量化后如何真正用于推理。
+- [30. LoRA Fine-Tuning Project | LoRA 微调项目](./30_LoRA_Fine_Tuning_Project.md)
+- [35. Quantized Inference and Deployment | 量化推理与部署](./35_Quantized_Inference_and_Deployment.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 24. SRAM Optimization Techniques | SRAM 优化技术](../01_Hardware_Math_and_Systems/24_SRAM_Optimization_Techniques.md)
-- [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
+
+---
 
 ### Step 1: 核心机制
 
-> **为什么普通的 INT4 量化不能用来微调大模型？**
-> 神经网络的权重通常服从正态分布（钟形曲线），中间多，两头少。但普通的 INT4 整数（从 0 到 15）是均匀分布的。这会导致大量的精度浪费。
+> **为什么普通的 4-bit 均匀量化不适合微调大模型？**
+> 
+> 关键在于权重的统计特性与均匀量化不匹配。神经网络的权重通常服从正态分布（钟形曲线），中间多，两头少。但普通的 4-bit 均匀量化（16 个等间隔码点）是均匀分布的。这会导致大量的精度浪费。
+
 > **NF4 (NormalFloat 4-bit) 的本质：**
-> 我们预先根据标准正态分布的面积，计算出 16 个分位点（Quantiles）。这 16 个值虽然在内存里用 4 个 bit 存储（代表索引 0 到 15），但它们对应的真实浮点数值是非常精确的、密度集中在 0 附近的浮点数。
+> 
+> 我们根据标准正态分布的累积分布函数（CDF）划分出 16 个等概率区间，并取每个区间的分位点作为对应码点。这样得到的 16 个 NF4 码点在 0 附近更密集、在尾部更稀疏，因此更贴合权重的分布特性。它们在存储时只用 4 个 bit 表示索引 0 到 15，但对应的真实数值是预先定义好的浮点码点。
 
 > **QLoRA 的训练流：**
-> 1. 基础权重 (Base Weights) 被压缩为 NF4 并冻结，不参与更新。
+> 1. 基础权重（Base Weights）以 NF4 索引的形式存储（每个参数占 4 位），并在微调过程中冻结，不参与梯度更新。
 > 2. 前向传播时，先查表把 NF4 索引还原成高精度权重，再交给线性层计算。
-> 3. 旁边挂载的 LoRA 矩阵 A 和 B 保持高精度，并且 `requires_grad=True`。
-> 4. 反向传播时，梯度主要更新 LoRA；底座权重只负责提供稳定的量化存储。
-> **一句话总结：** QLoRA 不是把一切都量化，而是在冻结底座权重的同时保留可训练的 LoRA 旁路，用 NF4 查表把显存压下来，再用高精度适配器把微调能力保住。
+> 3. LoRA 旁路保持高精度并参与训练。
+> 4. 反向传播时，梯度主要更新 LoRA 旁路参数；底座权重保持冻结，只负责提供稳定的量化存储。**一句话总结** QLoRA 的核心就是：底座权重用 NF4 压缩显存，LoRA 旁路保持高精度以保证微调效果。两者分工明确，互不干扰。
+
+理解了 NF4 在 QLoRA 中的角色之后，下一步我们来看 NF4 的码点具体是怎么算出来的。
 
 ### Step 2: 4-bit NormalFloat (NF4) 原理
-QLoRA 的核心在于 NF4 数据类型。由于神经网络的权重通常服从均值为 0 的正态分布，NF4 会按照正态分布的累积概率函数，把 16 个量化点更密地放在 0 附近、把更少的点放在尾部。这样它比均匀分布的 INT4 更贴近权重统计特性，也更适合作为冻结底座的存储格式。配合双重分块量化（Double Quantization），还能进一步压缩 scale 本身，把底座模型的显存消耗压榨到极限的 4 bits 每参数。
+NF4 的核心是一个预计算的 16 码点 lookup table。它基于标准正态分布的 CDF / 分位数函数（quantile function）构造，使码点在 0 附近更密集、在尾部更稀疏，因此比均匀 4-bit 更贴合神经网络权重的统计特性。
+
+从直观上看，INT4 是"均匀铺点"，而 NF4 是"按概率密度聚集铺点"：权重出现概率高的区域（靠近 0）码点更密，尾部区域码点更疏。
+
+其码点构造可概括为：
+
+$$
+q_i = \Phi^{-1}(p_i), \quad p_i = \frac{i - 0.5}{16}, \quad i = 1,2,\dots,16
+$$
+
+其中 $\Phi$ 表示标准正态分布的累积分布函数（CDF），$\Phi^{-1}$ 是其反函数（分位数函数）。实际实现中，这些码点会预先计算并存为 lookup table。
+
+NF4 解决了基础权重的极致压缩问题，而 QLoRA 的可训练能力来自 LoRA 策略。LoRA 旁路的具体形式是：在 QLoRA 中，$A$ 负责将输入投影到低秩空间，$B$ 再将低秩特征映射回输出维度，二者共同构成权重更新 $\Delta W = B \cdot A$。基础权重 $W$ 保持冻结，可训练参数从完整矩阵 $W$ 降为两个低秩矩阵 $A$和$B$。QLoRA 还配合 Double Quantization，对 NF4 量化过程中产生的 scale 等元数据再做一次量化，进一步压缩其存储开销。
 
 ### Step 3: 代码实现框架
-本节我们将模拟一个 16 个元素的 NF4 查表（Lookup Table）。在实际的 QLoRA 层中，权重通常以低精度索引的形式存放，但在前向传播时会先通过查表把它恢复成高精度权重，再交给线性层完成计算。下面的代码会把这条链路拆成两步：先做 NF4 反量化，再把基础分支和 LoRA 旁路合在一起，这样就能把原理和实现一一对上。
+本节我们将模拟 QLoRA 的前向传播链路。这里使用纯 PyTorch 演示 NF4 的核心逻辑，而不是调用真实的 bitsandbytes C++/CUDA 内核；两者的核心思想一致，都是先通过查表完成 NF4 反量化，再进行后续计算。
 
-###  Step 4: 动手实战
+本节的代码会拆成两步：
+- NF4 反量化：通过查表（Lookup Table）将 4-bit 索引还原为高精度浮点权重
+- 前向融合：将反量化后的基础权重计算结果与 LoRA 旁路输出相加。这样就能把“存储用 4-bit、计算用高精度”这条核心思路落实到代码实现中。LoRA 旁路的计算可写为：
+
+$$
+(x A^\top) B^\top \cdot \mathrm{scaling}
+$$
+
+在 Step 4 中，我们将把这两步落到一个完整的 `QLoRALinearSim` 类里，逐行补全 NF4 查表和前向融合的实现。
+
+### Step 4: 动手实战
 
 **要求**：请补全下方 `QLoRALinearSim` 类。为了不引入复杂的 C++ BitsAndBytes 底层实现，我们将用纯 PyTorch 模拟查表反量化和前向传播。
 
@@ -90,17 +129,22 @@ class QLoRALinearSim(nn.Module):
         # 2. 活跃的高精度 LoRA 适配器
         self.lora_A = nn.Parameter(torch.randn(r, in_features) * 0.01)
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
-        self.scaling = alpha / r
+        self.register_buffer("scaling", torch.tensor(alpha / r))
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # ==========================================
         # TODO 1: 基础权重反量化（查表还原）
+        # 提示：将 weight_nf4_indices 转为 long 类型作为索引，
+        #   从 nf4_table 中取值后乘以 weight_scale
         # ==========================================
         # indices = ???
         # dequantized_base_weight = ???
 
         # ==========================================
         # TODO 2: 计算基础分支和 LoRA 旁路分支
+        # 基础分支: F.linear(x, dequantized_base_weight)
+        # LoRA 分支: (x @ lora_A.T) @ lora_B.T * scaling
         # ==========================================
         # base_out = ???
         # lora_out = ???
@@ -160,7 +204,7 @@ def test_qlora():
 
         print("✅ 查表反量化逻辑正确！")
         print("✅ 梯度流向正确：低精度冻结，高精度更新！")
-        print("\n QLoRA 核心模拟测试准确通过！你已经掌握了如何在 24G 显卡上微调百亿大模型的密码。")
+        print("\n ✅ QLoRA 核心模拟测试通过！(真实生产环境需使用 bitsandbytes 等优化库)")
 
     except NotImplementedError:
         print("请先完成 TODO 代码！")
@@ -229,7 +273,7 @@ class QLoRALinearSim(nn.Module):
         # 2. 活跃的高精度 LoRA 适配器
         self.lora_A = nn.Parameter(torch.randn(r, in_features) * 0.01)
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
-        self.scaling = alpha / r
+        self.register_buffer("scaling", torch.tensor(alpha / r))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # TODO 1: 基础权重反量化（查表还原）
@@ -260,7 +304,7 @@ class QLoRALinearSim(nn.Module):
 - **技术细节**：LoRA 输出需要乘以 scaling 因子（alpha / r）来平衡贡献
 
 **NF4 量化原理**
-- **标准量化问题**：INT4 均匀分布，但神经网络权重服从正态分布，导致精度浪费
+- **INT4 的局限**：INT4 的 16 个码点在数轴上均匀分布，但神经网络权重通常集中在 0 附近（正态分布），两者分布特性不匹配。均匀码点导致尾部区域分配了过多码点（浪费），而 0 附近区域码点不足（精度损失）。
 - **NF4 解决方案**：根据标准正态分布的累积分布函数（CDF）计算 16 个分位点
 - **信息密度**：在 0 附近分配更多的量化点，在尾部分配更少的点
 - **查表机制**：4-bit 索引 → NF4 浮点值 → 乘以 scale 恢复原始范围
@@ -268,7 +312,8 @@ class QLoRALinearSim(nn.Module):
 **工程优化要点**
 - **显存节省**：基础权重从 FP16（2 bytes）降至 NF4（0.5 bytes），节省 75% 显存
 - **双重量化**：对 scale 参数本身也进行量化，进一步节省显存
-- **分块量化**：每 64 或 128 个参数共享一个 scale，平衡精度和显存
+- **关于 scaling 的存储方式**：scaling = alpha / r 在代码中被注册为 buffer（而非 Python float），以确保它随模型一起保存、加载和设备迁移。这是区分"模型状态"与"普通变量"的工程习惯。
+- **分块量化**：NF4 将权重分成若干小块（如每 64 个参数一块），每块独立计算一个 scale，以适应不同区域的数值范围。这些 scale 本身再用 Double Quantization 进一步压缩，避免元数据开销过大。
 - **梯度流向**：基础权重冻结，梯度只更新 LoRA 参数，避免量化误差累积
 - **训练效率**：虽然反量化增加计算开销，但显存节省允许更大的 batch size
 - **工业实践**：QLoRA 使 33B 模型可在单张 24GB 显卡上微调，65B 模型可在单张 48GB 显卡上微调

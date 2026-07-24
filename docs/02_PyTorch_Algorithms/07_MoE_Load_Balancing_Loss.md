@@ -10,30 +10,37 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在上一节 `06_MoE_Router` 中，我们实现了 Top-K 路由。但在真实的 MoE 模型（如 Mixtral 8x7B, DeepSeek）训练中，会遇到一个非常严重的问题：**路由崩塌 (Router Collapse)**。
-即门控网络把大多数 Token 都发给少数几个专家，其他专家被长期闲置，MoE 就会退化成“少数专家过载、其余专家浪费”的状态。
-因此，面试官非常爱考：**如何用代码实现 MoE 的辅助损失函数 (Auxiliary Loss) 来强制负载均衡？**
+---
+
+## 本节导读
+
+上一节的 Router 已经能把 token 分给 Top-K 专家，但训练过程中它可能很快学会“偏科”：大量 token 被送到少数几个专家，其他专家长期拿不到样本。这样 MoE 表面上有很多参数，实际却退化成少数专家过载、其余专家闲置。
+
+负载均衡损失要解决的就是这个问题：在主任务 loss 之外加入一个很小的辅助项，同时约束专家被选中的频率和平均路由概率。本节会实现 MoE auxiliary loss，重点看清 $f_i$ 和 $P_i$ 分别统计什么。完成后，你应该能理解 Router 不只要会选专家，还要被训练目标约束得足够均衡。
 
 **关键词：** `MoE`, `Load Balancing`, `Auxiliary Loss`
+
+---
 ## 前置阅读
 
-**导语：** 先看 Router，再看负载均衡损失会更容易理解 MoE 为什么会塌缩。
+**导语：** 先看 Router 如何做 Top-K 分配，再看负载均衡损失如何约束专家使用率。
 
-- [P0: 13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../00_Prerequisites/13_End_to_End_Fine_Tuning_Experiment.md)
-- [20. FlashAttention Sim | FlashAttention 模拟](../02_PyTorch_Algorithms/20_FlashAttention_Sim.md)
+- [06. MoE Router | MoE 路由器](../02_PyTorch_Algorithms/06_MoE_Router.md)
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 
 
 ## 相关阅读
 
-**导语：** 如果想继续看架构侧的技巧，可以顺着读 Qwen / Gemma 的变体。
+**导语：** 理解 MoE 的训练约束后，可以继续看显存、通信和 profiling 如何影响大规模 MoE 训练与部署。
 
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO 优化](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 
+---
 ### Step 1: 核心数学公式
 
-这一节先把负载均衡损失为什么能约束路由崩塌讲清楚。
+负载均衡损失的目标，是防止所有 token 长期挤向少数专家，导致 MoE 从稀疏专家系统退化成拥塞路由。
 
 为了让 $T$ 个 Token 均匀地分配给 $E$ 个专家，我们需要设计一个惩罚项，加到总的 CrossEntropy Loss 里。
 Mixtral / Switch Transformer 使用的经典公式：
@@ -55,7 +62,7 @@ $$
  f_i = \frac{1}{T \cdot K} \sum_{t=1}^{T} \mathbf{1}_{i \in \text{Top-}K(p_t)}, \quad P_i = \frac{1}{T} \sum_{t=1}^{T} p_{t,i}
 $$
 
-这里：
+具体含义：
 - $f_i$ 统计的是“专家 $i$ 被选中的总次数 / 总分配次数 $T \cdot K$”，因此 $\sum_i f_i = 1$。
 - $P_i$ 是对每个 token 在全部 $E$ 个专家上的 Softmax 路由概率做平均，由于每个 token 的路由概率在所有专家上求和为 $1$，因此 $\sum_i P_i = 1$。
 
@@ -71,11 +78,11 @@ $$
 
 **关键点**：本实现支持 Top-K 路由（$K \ge 1$），每个 Token 选择 `top_k` 个专家。统计 $f_i$ 时按总分配次数 `total_tokens * top_k` 归一化；统计 $P_i$ 时按 token 总数 `total_tokens` 归一化。
 
-这里可以把它理解成两个视角的乘积：$P_i$ 描述路由器“想把 token 分给谁”，$f_i$ 描述实际“分给了谁”；只有两者同时偏向同一批专家时，loss 才会明显上升，从而把路由从塌缩状态拉回均匀状态。
+可以把它理解成两个视角的乘积：$P_i$ 描述路由器“想把 token 分给谁”，$f_i$ 描述实际“分给了谁”；只有两者同时偏向同一批专家时，loss 才会明显上升，从而把路由从塌缩状态拉回均匀状态。
 
 ### Step 3: 动手实战
 
-这里开始把 $P_i$、$f_i$ 和最终 auxiliary loss 写成可运行代码。
+接下来把 $P_i$、$f_i$ 和最终 auxiliary loss 写成可运行代码。
 
 **要求**：请补全下方 `compute_load_balancing_loss` 的逻辑。
 

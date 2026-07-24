@@ -10,26 +10,37 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将解析大语言模型领域最具影响力的微调算法：**LoRA (Low-Rank Adaptation)**。我们将实现一个 `LoRALinear` 层，替换标准的 `nn.Linear`，体验矩阵秩分解是如何极大地节省显存开销的。
-可以先把 LoRA 记成“冻结原模型，只在旁边加一条低秩可训练旁路”，这样就能在很少参数下完成微调。
+---
+
+## 本节导读
+
+大模型微调最直接的做法是更新全部参数，但这会把显存压力迅速放大：除了模型权重，还要保存梯度和优化器状态。很多场景里，我们真正需要的不是重写整个模型，而是在已有能力上做小幅适配。
+
+LoRA 的思路就是冻结原始权重，只在旁边加一条低秩可训练旁路。本节会实现一个最小 `LoRALinear`，看清矩阵 A、B 如何构成 $\Delta W$，以及为什么它能用很少的可训练参数完成微调。完成后，你应该能把 LoRA 接到后面的端到端微调实验和 QLoRA 低比特微调里。
 
 **关键词：** `LoRA`, `PEFT`, `adapter`
+
+---
 ## 前置阅读
 
-**导语：** 先把 LoRA 依赖的 PyTorch 基础和训练闭环补齐，再来看参数高效微调。
+**导语：** 先把模型封装、优化器和最小训练闭环补齐，再看 LoRA 如何只训练一小部分参数。
 - [P0: 09. PyTorch nn.Module Basics | nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
 - [P0: 11. PyTorch Optimizers and Loss | 优化器与损失](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
 
 ## 相关阅读
 
-**导语：** LoRA 的参数高效与显存收益，可以结合硬件、VRAM 和性能分析一起理解。
+**导语：** 理解 LoRA 的低秩旁路后，可以继续看端到端微调、显存账本和 4-bit 微调如何把它项目化。
 - [P1: 03. GPU Architecture and Memory | GPU 架构与显存](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存估算与 ZeRO](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
+- [26. QLoRA and 4bit Quantization | QLoRA 与 4-bit 量化](../02_PyTorch_Algorithms/26_QLoRA_and_4bit_Quantization.md)
+  
+---
 ### Step 1: 核心思想与痛点
 
-这一节先把全参微调为什么贵、LoRA 为什么省说清楚。
+全参微调的主要成本来自保存和更新完整参数，而 LoRA 的思路是只训练一条低秩旁路。
 
 > **为什么需要 LoRA？**
 > 全参微调 (Full Fine-tuning) 一个 7B 模型需要大规模的显存来保存优化器状态（Adam 需要保存参数的动量和方差，占用额外 8 倍参数量的显存）。绝大多数中小企业和个人开发者无法承担。
@@ -42,7 +53,7 @@
 
 ###  Step 3: 核心公式与张量维度
 
-这一节把低秩分解和缩放因子写清楚，方便把公式和代码对应起来。
+LoRA 的核心公式可以拆成两部分：冻结的原始权重输出，以及由低秩矩阵 A、B 构成的增量输出。
 
 **前向传播公式：**
 给定预训练权重 $W_0 \in \mathbb{R}^{d \times k}$，输入 $x$，LoRA 修改后的输出为：

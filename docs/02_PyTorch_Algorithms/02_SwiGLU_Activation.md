@@ -10,14 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在组装 LLaMA-3 的那一节中，我们使用了 `SwiGLU` 作为 MLP 的激活函数。为什么所有主流大模型（LLaMA, Qwen, Mistral, PaLM）都在抛弃 ReLU/GELU 而转向 SwiGLU？
-本节我们将深入推导 SwiGLU 的设计原理，特别是**如何调整隐藏层的维度**，以保证参数量与标准 Transformer 严格对齐。这是面试中非常经典的**架构推导题**。
-如果你对 Transformer 的 MLP 还不熟，可以先记住一个最小概念：`hidden size` 是 token 向量的长度，`gate` 和 `up` 是 SwiGLU 里并行的两条投影分支。
+---
+
+## 本节导读
+
+Transformer 的 MLP 不只是把向量升维、过激活函数、再降维这么简单。大模型需要在每个 token 的特征里学会“哪些信息该放大，哪些信息该压住”，普通 ReLU/GELU 的单路激活很难显式表达这种选择过程。
+
+SwiGLU 用两条并行分支做门控：一条提供候选特征，另一条决定通过多少。本节会实现一个最小 SwiGLU，并推导隐藏层维度为什么要调整，避免门控结构让参数量无意膨胀。完成后，你应该能看懂现代 LLM 的 MLP 为什么普遍采用 gated activation，也能把它和 RMSNorm、Attention 一起放进完整模型结构里。
 
 **关键词：** `SwiGLU`, `GLU`, `gating`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把张量运算、激活函数和归一化顺理清楚，先看下面几页会更容易进入门控激活。
+**导语：** 先把张量运算、激活函数和归一化直觉理顺，再看 MLP 里的门控分支会更容易。
 
 - [P0: 05. PyTorch Tensor Fundamentals | PyTorch 张量基础操作](../00_Prerequisites/05_PyTorch_Tensor_Fundamentals.md)
 - [P0: 14. Activation Functions | 激活函数](../00_Prerequisites/14_Activation_Functions.md)
@@ -25,11 +31,14 @@
 
 ## 相关阅读
 
-**导语：** 本节先用纯 PyTorch 讲清 SwiGLU 的门控原理与维度变化；如果想看同一结构在更高吞吐实现里怎么落地，再看混合精度和算子融合相关页面。
+**导语：** 理解 SwiGLU 后，可以继续看位置编码、Attention，以及同一类 MLP 算子在混合精度和融合优化里的落地方式。
 
+- [03. RoPE Tutorial | 旋转位置编码教程](../02_PyTorch_Algorithms/03_RoPE_Tutorial.md)
+- [04. Attention MHA GQA | 多头注意力](../02_PyTorch_Algorithms/04_Attention_MHA_GQA.md)
 - [P1: 12. TensorCore and Mixed Precision | Tensor Core 与混合精度](../01_Hardware_Math_and_Systems/12_TensorCore_and_Mixed_Precision.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 从 Activation 到 Sigmoid 再到 Swish，门控机制的每一步演化都在回答同一个问题：怎么让信息流动得更好。

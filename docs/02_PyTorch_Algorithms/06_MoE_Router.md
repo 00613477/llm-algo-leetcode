@@ -10,14 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将解析目前最火爆的模型架构：**MoE (Mixture of Experts)**。这也是 Mixtral、Grok、DeepSeek 等顶级开源模型背后的核心技术。
-面试中最常考的并不是专家的内部结构，而是那个“交通警察”——**路由机制 (Router) 和专家权重计算**。
-可以先把 MoE 记成“不是每个 token 都跑所有参数”，而是让 Router 决定它该去找哪几个专家，从而用稀疏激活换取更大的参数容量。
+---
+
+## 本节导读
+
+普通 Transformer Block 里的 MLP 是稠密计算：每个 token 都要经过同一组参数。模型越大，计算量也越大；但很多时候，一个 token 并不需要动用全部专家能力，只需要被送到最合适的少数分支。
+
+MoE 的核心就是把 MLP 拆成多个 expert，再用 Router 为每个 token 选择 Top-K 专家。本节会实现最小路由器，重点看清 router logits、softmax 概率、Top-K 选择和专家权重如何连接起来。完成后，你应该能理解 MoE 如何用稀疏激活换取更大的参数容量，也能为下一节的负载均衡损失做好准备。
 
 **关键词：** `MoE`, `Router`, `Sparse Routing`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把 Block 组装和 Attention 主线理顺，先看下面两页再进入 MoE 结构会更顺。
+**导语：** 先把 Decoder Layer 的基本结构和 `nn.Module` 封装理顺，再看 MoE 如何替换其中的稠密 MLP。
 
 - [05. LLaMA3 Block Tutorial | LLaMA3 Block 教程](../02_PyTorch_Algorithms/05_LLaMA3_Block_Tutorial.md)
 - [P0: 09. PyTorch nn.Module Basics | PyTorch nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
@@ -25,14 +31,16 @@
 
 ## 相关阅读
 
-**导语：** 本节先把 Router 的路由决策讲清楚；如果想继续看训练时如何避免专家塌缩，再看负载均衡损失。
+**导语：** 理解 Router 的 Top-K 决策后，下一步要看训练中如何避免专家塌缩，以及 MoE 在分布式执行中的通信压力。
 
+- [07. MoE Load Balancing Loss | MoE 负载均衡损失](../02_PyTorch_Algorithms/07_MoE_Load_Balancing_Loss.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 
+---
 ### Step 1: 核心思想与痛点
 
-这一节先把稠密模型为什么贵、MoE 为什么能省算力讲清楚。
+稠密模型的主要成本来自每个 token 都要经过全部参数，而 MoE 的核心思路是只激活少数专家来降低计算量。
 
 > **Dense (稠密) 模型的痛点：**
 > 在标准的 Transformer 中，每一个 Token 都必须经过全网络的所有参数（比如 70B 的 LLaMA）。这导致随着模型变大，推理和训练的计算量呈线性爆炸。
@@ -50,7 +58,7 @@
 
 ###  Step 3: 核心数学机制：Top-K Routing
 
-这一节把 Router、Top-K 和重归一化的顺序摆清楚，后面的代码就是按这条链路落地。
+Top-K Routing 的关键不是只选出最大专家，而是按“全局 Softmax -> Top-K -> 重归一化”的顺序保留全局置信度。
 
 **1. 门控网络 (Gating / Router)：**
 给定输入 Token 的特征 $x \in \mathbb{R}^d$，我们用一个线性层将其映射到各个专家的打分：
@@ -73,7 +81,7 @@ $$ y = \sum_{i \in TopK} w_i \cdot \text{Expert}_{idx_i}(x) $$
 
 ###  Step 4: 动手实战
 
-这里开始把全局 Softmax、Top-K 截取和稀疏专家分发写成最小可运行实现。
+接下来把全局 Softmax、Top-K 截取和稀疏专家分发写成最小可运行实现。
 
 **要求**：请补全下方 `TopKRouter` 函数。
 这也是面试中非常经典的 `torch.topk`、`scatter` 和 `gather` 等高级张量操作的考察点。
@@ -154,7 +162,7 @@ class SparseMoEBlock(nn.Module):
         flat_hidden_states = hidden_states.view(-1, hidden_size)
         
         # 工业界(vLLM/Megatron)会通过 Token Sorting (索引排序) 汇聚同专家的Token，
-        # 这里为便于理解核心算法逻辑，使用 For 循环遍历被选中的 Expert
+        # 为便于理解核心算法逻辑，使用 For 循环遍历被选中的 Expert
         for expert_idx, expert in enumerate(self.experts):
             token_idx, kth_expert = torch.where(selected_experts == expert_idx)
             if token_idx.shape[0] > 0:
@@ -301,7 +309,7 @@ class SparseMoEBlock(nn.Module):
 
 - **实现方式**：`routing_weights, selected_experts = torch.topk(routing_probs, self.top_k, dim=-1)`
 - **关键点**：从全局概率分布中提取最大的 K 个概率值及其对应的专家索引。
-- **本质区别**：这里截取的是**概率**而非原始 logits，这是与错误做法的核心差异。
+- **本质区别**：截取对象是**概率**而非原始 logits，这是与错误做法的核心差异。
 - **工业实践**：Mixtral 8x7B、DeepSeek 等主流 MoE 模型均采用此方法。
 
 **3. TODO 3: 重归一化**

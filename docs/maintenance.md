@@ -2,6 +2,12 @@
 
 只看三件事：怎么同步、怎么验证、脚本各管哪一层。正文模板规则见 [template_guidelines.md](./template_guidelines.md)。
 
+## 源文件优先
+
+- 先改源文件，再同步 `docs/` 镜像，不能直接手改 `docs/` 作为最终提交。
+- 正文类改动统一从源 notebook 或源 markdown 出发，完成后再运行对应同步脚本。
+- 如果镜像页和源文件出现不一致，以源文件为准，后续同步会覆盖镜像。
+
 ## 脚本分层
 
 | 层 | 脚本 | 作用 |
@@ -14,6 +20,20 @@
 | `migration` | `tools/md_to_notebook.py` | markdown -> notebook 迁移辅助 |
 
 `tools/convert_chapter0_1.py` 只保留 legacy 兼容。
+
+## Part 0-4 维护分工
+
+- `Part 00` 和 `Part 01` 一起作为前置知识层，重点是基础语言、张量、系统视角和性能边界。
+- `Part 02` 是主干实现层，重点是 PyTorch 里的训练、推理、并行、量化和项目收口。
+- `Part 02` 的项目建设按“核心项目 + 扩展项目 + 延伸方向”组织：`2.9` 是项目收口层，核心项目优先覆盖训练落地、推理选型和训练分析，扩展项目优先覆盖 profiling 闭环、并行基准和量化部署；`36-42` 则作为更细的延伸方向，继续补推理服务、cache、量化家族和通信 profiling。项目页的 TODO 仍保持 notebook-first 的统一结构，但职责从“补算法”转为“组织实验、输出对比和沉淀结论”。
+- `Part 03` 是 Triton / kernel 过渡层，重点是把框架级实现继续下沉到高性能算子。
+- `Part 04` 是 CUDA / 系统优化层，重点是继续向硬件、通信、调度和架构收口。
+- 维护时可以按下面的验证分段理解：
+  - `verify.py part0_1`：检查 `Part 00 / Part 01`
+  - `verify.py part2`：检查 `Part 02`
+  - `verify.py part3`：检查 `Part 03`
+  - `verify.py part4`：检查 `Part 04`
+- 横向专题主要横切 `Part 00 / Part 01 / Part 02`，后续若继续下探性能和实现，可以逐步接到 `Part 03 / Part 04`。
 
 ## 日常流程
 
