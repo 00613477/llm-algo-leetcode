@@ -36,9 +36,11 @@ LoRA 的思路就是冻结原始权重，只在旁边加一条低秩可训练旁
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 - [26. QLoRA and 4bit Quantization | QLoRA 与 4-bit 量化](../02_PyTorch_Algorithms/26_QLoRA_and_4bit_Quantization.md)
+  
+---
 ### Step 1: 核心思想与痛点
 
-这一节先把全参微调为什么贵、LoRA 为什么省说清楚。
+全参微调的主要成本来自保存和更新完整参数，而 LoRA 的思路是只训练一条低秩旁路。
 
 > **为什么需要 LoRA？**
 > 全参微调 (Full Fine-tuning) 一个 7B 模型需要大规模的显存来保存优化器状态（Adam 需要保存参数的动量和方差，占用额外 8 倍参数量的显存）。绝大多数中小企业和个人开发者无法承担。
@@ -51,7 +53,7 @@ LoRA 的思路就是冻结原始权重，只在旁边加一条低秩可训练旁
 
 ###  Step 3: 核心公式与张量维度
 
-这一节把低秩分解和缩放因子写清楚，方便把公式和代码对应起来。
+LoRA 的核心公式可以拆成两部分：冻结的原始权重输出，以及由低秩矩阵 A、B 构成的增量输出。
 
 **前向传播公式：**
 给定预训练权重 $W_0 \in \mathbb{R}^{d \times k}$，输入 $x$，LoRA 修改后的输出为：

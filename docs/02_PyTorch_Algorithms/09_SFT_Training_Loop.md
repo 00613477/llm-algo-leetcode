@@ -38,9 +38,10 @@
 - [P0: 17. PyTorch Profiling Basics | PyTorch 性能剖析基础](../00_Prerequisites/17_PyTorch_Profiling_Basics.md)
 - [P0: 18. Memory Profiling and Optimization | 显存剖析与优化](../00_Prerequisites/18_Memory_Profiling_and_Optimization.md)
 
+---
 ### Step 1: 核心思想与痛点
 
-这一节先把预训练和 SFT 的目标差异说清楚，再看为什么 prompt 需要被 mask 掉。
+SFT 和预训练的关键差异在于 loss 只应该作用在 response 上，而不是 prompt 上。
 
 > **预训练 (Pre-training) vs 微调 (SFT)**
 > * **预训练**：模型预测下一个 Token。给定一本书，每一个字都要算 Loss。
@@ -61,7 +62,7 @@
 
 **要求**：请补全下方 `build_sft_data`（构造单条 SFT 数据）和 `compute_sft_loss`（计算损失）的 `TODO` 逻辑。
 
-这一步会把“数据构造 -> 标签 mask -> next-token 对齐”真正串成一个最小训练闭环。
+接下来把“数据构造 -> 标签 mask -> next-token 对齐”串成一个最小训练闭环。
 
 
 ```python

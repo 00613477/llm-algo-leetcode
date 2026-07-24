@@ -40,6 +40,7 @@
 - [P1: 08. Programming Models CUDA Triton | 编程模型演进](../01_Hardware_Math_and_Systems/08_Programming_Models_CUDA_Triton.md)
 - [P1: 09. AI Compilers and Graph Optimization | AI 编译器与计算图优化](../01_Hardware_Math_and_Systems/09_AI_Compilers_and_Graph_Optimization.md)
 
+---
 ### Step 1: 核心差异与机制
 
 本节对比 Qwen 和 Gemma 在架构设计上的两项关键改动及其设计动机。
