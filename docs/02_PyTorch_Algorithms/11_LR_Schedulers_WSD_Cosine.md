@@ -10,19 +10,28 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将实现一个支持 Warmup-Stable-Decay 的学习率调度器，把训练前期预热、中期稳定和后期退火这三段曲线串成一个完整的调度逻辑。可以先把它记成一条三段式曲线：先抬起来，再保持住，最后再退火。
+---
+
+## 本节导读
+
+训练不是只选一个固定学习率然后一路跑到底。刚开始参数和优化器状态都不稳定，学习率太大容易把 loss 冲飞；中期如果过早衰减，模型又会失去继续吸收数据的能力；到了末期，还需要把更新幅度收下来帮助收敛。
+
+WSD 把这个训练节奏拆成三段：先 warmup 把学习率抬起来，中间 stable 保持学习能力，最后 decay 做收敛退火。本节会实现一个最小学习率调度器，把三段曲线翻译成 `get_lr()` 里的分支判断。完成后，你应该能把学习率变化和训练稳定性、继续训练以及后面的端到端微调实验联系起来。
 
 **关键词：** `warmup`, `stable`, `decay`
+
+---
 ## 前置阅读
 
-**导语：** 先补齐 PyTorch 学习率调度和训练闭环所需的基础，再来看 WSD 退火策略。
+**导语：** 先补齐优化器、最小训练接口和训练循环，再看学习率如何按阶段控制更新幅度。
 - [P0: 11. PyTorch Optimizers and Loss | 优化器与损失](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 12. PyTorch Minimal Training Interface | 最小训练接口](../00_Prerequisites/12_PyTorch_Minimal_Training_Interface.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
 
 ## 相关阅读
 
-**导语：** WSD 的学习率曲线和训练稳定性，也可以结合性能分析与调度背景一起理解。
+**导语：** 理解学习率调度后，可以把它放进端到端微调实验，再结合 profiling 观察训练稳定性和开销。
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA 流与异步](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)

@@ -10,19 +10,28 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在做大模型微调时，显存通常先被 batch size 吃满。梯度累积的核心思路是：把一个大 batch 拆成多个 micro-batch，分多次 backward，最后只 step 一次，从而在不增加峰值显存的前提下，模拟更大的有效 batch。可以先把它记成：把大 batch 拆成小块，分多次反传，最后一次更新。
+---
+
+## 本节导读
+
+训练时我们常常希望 batch 更大，因为梯度会更稳定、更新方向更平滑。但大模型微调里，batch size 往往最先把显存吃满；如果为了省显存把 batch 降得太小，训练又可能变得抖动、不稳定。
+
+梯度累积的做法是把一个大 batch 拆成多个 micro-batch，分多次 backward，最后只执行一次 optimizer step。本节会实现完整 batch 更新和累积更新的对照，验证只要 loss 缩放和 step 时机正确，两种方式的参数更新可以近似一致。完成后，你应该能把它放进后面的端到端微调实验里，用更小峰值显存模拟更大的有效 batch。
 
 **关键词：** `gradient accumulation`, `micro-batch`, `effective batch`
+
+---
 ## 前置阅读
 
-**导语：** 先把梯度累积需要的 PyTorch 训练接口和张量操作补齐，再来看小 batch 聚合更新。
+**导语：** 先把模型封装、优化器和训练循环补齐，再看多个 micro-batch 如何合成一次有效更新。
 - [P0: 09. PyTorch nn.Module Basics | nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
 - [P0: 11. PyTorch Optimizers and Loss | 优化器与损失](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
 
 ## 相关阅读
 
-**导语：** 梯度累积和训练性能、显存占用关系紧密，可结合硬件和 profiling 一起看。
+**导语：** 理解梯度累积后，可以继续把它放进端到端微调闭环，并结合显存账本和 profiling 分析收益。
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存估算与 ZeRO](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
