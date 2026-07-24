@@ -10,23 +10,35 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把 PPO 的 Actor Loss、Reference / Reward / Critic 四模型流转和显存压力讲清楚，再去理解为什么 RLHF 依然是很多对齐系统里的主路径，直觉会更稳。
+---
+
+## 本节导读
+
+完成 SFT 以后，模型已经能模仿数据里的回答，但还没有真正学会“哪个回答更符合人类偏好”。RLHF/PPO 要解决的就是这个问题：让模型根据奖励信号继续调整生成策略；代价是训练链路一下变重，Actor、Reference、Reward Model 和 Critic 会同时进入显存账本。
+
+本节不展开完整 RLHF 系统，而是抓住两个最关键的落点：PPO Actor Loss 如何用 ratio 和 advantage 控制更新方向，以及四模型流转为什么会带来明显显存压力。完成后，你应该能看懂 PPO 对齐训练为什么比普通 SFT 更重，也能理解后面 DPO / GRPO 为什么会尝试把这条链路做轻。
 
 **关键词：** `PPO`, `ratio`, `advantage`
+
+---
 ## 前置阅读
 
-**导语：** 先补齐训练闭环和优化器基础，再看 RLHF / PPO 的对齐训练会更顺。
+**导语：** 先补齐训练闭环和优化器基础，再看 RLHF / PPO 如何在 SFT 之后继续做偏好对齐会更顺。
 - [P0: 11. PyTorch Optimizers and Loss | PyTorch 优化器与损失函数](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 12. PyTorch Minimal Training Interface | PyTorch 最小训练接口](../00_Prerequisites/12_PyTorch_Minimal_Training_Interface.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 
 ## 相关阅读
 
-**导语：** PPO 之后最自然的延伸，是把对齐优化和训练系统视角一起看。
+**导语：** PPO 之后最自然的延伸，是继续看更轻的偏好优化损失，以及训练系统侧的显存、性能和通信瓶颈。
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO 优化](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
+- [15. DPO Loss Tutorial | 直接偏好优化损失教程](../02_PyTorch_Algorithms/15_DPO_Loss_Tutorial.md)
+- [16. GRPO Loss Tutorial | 群体相对策略优化损失教程](../02_PyTorch_Algorithms/16_GRPO_Loss_Tutorial.md)
 
+---
 ### Step 1: PPO 算法与 Actor Loss 公式
     
 PPO 的核心思想是：**让 Actor 往 Reward 高的方向更新，但步子不能迈得太大。**

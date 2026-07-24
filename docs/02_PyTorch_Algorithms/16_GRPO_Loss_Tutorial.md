@@ -10,24 +10,34 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-GRPO (Group Relative Policy Optimization) 可以看作面向组内比较的策略优化方法。它通常不依赖显式 Critic，而是把同一组样本的奖励做相对归一化，再结合策略比率限制更新幅度。本页提供一个简化版的 GRPO Loss 实现，用来把 `RLHF -> DPO -> GRPO` 这条对齐链路补齐。
+---
+
+## 本节导读
+
+在偏好优化里，模型常常会针对同一个 prompt 生成多个候选答案。此时我们不只关心某个答案的绝对奖励，更关心它在同一组候选里相对好还是相对差。
+
+GRPO 的重点就是把这种“组内比较”变成训练信号：先把同组奖励归一化成相对优势，再用类似 PPO 的裁剪目标限制策略更新幅度，从而减少对显式 Critic 的依赖。本节实现一个简化版 GRPO Loss。完成后，你应该能看懂 `group_ids`、相对优势和策略比率裁剪各自解决什么问题，并把 `RLHF -> DPO -> GRPO` 这条对齐链路串起来。
 
 **关键词：** `GRPO`, `group relative`, `reward`
+
+---
 ## 前置阅读
 
-**导语：** 先补齐训练闭环和性能分析基础，再看 GRPO 的组内相对优化思想会更顺。
+**导语：** 先理解训练闭环、偏好优化和显存账本，再看 GRPO 如何用组内相对优势稳定策略更新。
 
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
 - [P0: 20. Profiling and Memory Ledger | 性能分析与显存账本](../00_Prerequisites/20_Profiling_and_Memory_Ledger.md)
+- [15. DPO Loss Tutorial | 直接偏好优化损失教程](../02_PyTorch_Algorithms/15_DPO_Loss_Tutorial.md)
 
 
 ## 相关阅读
 
-**导语：** 完成对齐链路后，可以继续看性能分析与通信基础。
+**导语：** 完成对齐损失后，可以继续从性能分析和通信基础理解大规模对齐训练的工程瓶颈。
 
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 20. NCCL and AllReduce Basics | NCCL 与 AllReduce 基础](../01_Hardware_Math_and_Systems/20_NCCL_and_AllReduce_Basics.md)
 
+---
 ### Step 1: 核心思想
 
 > **为什么需要 GRPO？**
