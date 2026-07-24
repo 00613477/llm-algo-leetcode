@@ -240,7 +240,9 @@ export default defineConfig({
               { text: '组内导读', link: '/02_PyTorch_Algorithms/2_3' },
               { text: '09. 监督微调训练循环', link: '/02_PyTorch_Algorithms/09_SFT_Training_Loop' },
               { text: '10. LoRA 教程', link: '/02_PyTorch_Algorithms/10_LoRA_Tutorial' },
-              { text: '11. WSD 余弦学习率调度器', link: '/02_PyTorch_Algorithms/11_LR_Schedulers_WSD_Cosine' }
+              { text: '11. WSD 余弦学习率调度器', link: '/02_PyTorch_Algorithms/11_LR_Schedulers_WSD_Cosine' },
+              { text: '12. 梯度累积', link: '/02_PyTorch_Algorithms/12_Gradient_Accumulation' },
+              { text: '13. 端到端微调实验', link: '/02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment' }
             ]
           },
           {
@@ -278,10 +280,18 @@ export default defineConfig({
             collapsed: true,
             items: [
               { text: '组内导读', link: '/02_PyTorch_Algorithms/2_7' },
+              { text: '2.7A 高级推理策略', link: '/02_PyTorch_Algorithms/2_7A' },
               { text: '23. 投机解码', link: '/02_PyTorch_Algorithms/23_Speculative_Decoding' },
               { text: '24. SGLang 基数注意力', link: '/02_PyTorch_Algorithms/24_SGLang_RadixAttention' },
+              { text: '36. Prefix Caching 与 Chunked Prefill', link: '/02_PyTorch_Algorithms/36_Prefix_Caching_and_Chunked_Prefill' },
+              { text: '37. Multi-Token Decoding', link: '/02_PyTorch_Algorithms/37_Multi_Token_Decoding' },
+              { text: '38. Decode Scheduling', link: '/02_PyTorch_Algorithms/38_Decode_Scheduling' },
+              { text: '41. KV Cache Scheduling', link: '/02_PyTorch_Algorithms/41_KV_Cache_Scheduling' },
+              { text: '2.7B 模型压缩与量化', link: '/02_PyTorch_Algorithms/2_7B' },
               { text: '25. W8A16 量化', link: '/02_PyTorch_Algorithms/25_Quantization_W8A16' },
-              { text: '26. QLoRA 与 4-bit 量化', link: '/02_PyTorch_Algorithms/26_QLoRA_and_4bit_Quantization' }
+              { text: '26. QLoRA 与 4-bit 量化', link: '/02_PyTorch_Algorithms/26_QLoRA_and_4bit_Quantization' },
+              { text: '39. GPTQ 与 AWQ 权重量化', link: '/02_PyTorch_Algorithms/39_GPTQ_and_AWQ_Weight_Quantization' },
+              { text: '40. FP8 与 KV Cache 量化', link: '/02_PyTorch_Algorithms/40_FP8_and_KV_Cache_Quantization' }
             ]
           },
           {
@@ -291,7 +301,21 @@ export default defineConfig({
               { text: '组内导读', link: '/02_PyTorch_Algorithms/2_8' },
               { text: '27. ZeRO 优化器模拟', link: '/02_PyTorch_Algorithms/27_ZeRO_Optimizer_Sim' },
               { text: '28. Pipeline 并行微批次', link: '/02_PyTorch_Algorithms/28_Pipeline_Parallelism_MicroBatch' },
-              { text: '29. Tensor 并行模拟', link: '/02_PyTorch_Algorithms/29_Tensor_Parallelism_Sim' }
+              { text: '29. Tensor 并行模拟', link: '/02_PyTorch_Algorithms/29_Tensor_Parallelism_Sim' },
+              { text: '42. NCCL 通信 profiling', link: '/02_PyTorch_Algorithms/42_Communication_Profiling_with_NCCL' }
+            ]
+          },
+          {
+            text: '2.9 项目实战',
+            collapsed: true,
+            items: [
+              { text: '组内导读', link: '/02_PyTorch_Algorithms/2_9' },
+              { text: '30. LoRA 微调项目', link: '/02_PyTorch_Algorithms/30_LoRA_Fine_Tuning_Project' },
+              { text: '31. 推理性能对比实验', link: '/02_PyTorch_Algorithms/31_Inference_Performance_Comparison' },
+              { text: '32. 训练性能分析', link: '/02_PyTorch_Algorithms/32_Training_Performance_Analysis' },
+              { text: '33. Profiling 驱动端到端优化', link: '/02_PyTorch_Algorithms/33_Profiling_Driven_End_to_End_Optimization' },
+              { text: '34. 分布式并行基准项目', link: '/02_PyTorch_Algorithms/34_Distributed_Parallel_Benchmark' },
+              { text: '35. 量化推理与部署项目', link: '/02_PyTorch_Algorithms/35_Quantized_Inference_and_Deployment' }
             ]
           }
         ]
