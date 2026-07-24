@@ -9,23 +9,32 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先看投机解码和分页式 KV 管理，再看 RadixAttention 会更容易理解多轮对话缓存。
+---
+
+## 本节导读
+
+真实推理服务里，请求往往不是彼此独立的：多轮对话会反复带上历史上下文，Agent 和工具调用也会共享很长的 system prompt。问题在于，如果每个请求都重新计算这些公共前缀，KV Cache 会被重复占用，首 token 延迟也会被拖高。
+
+RadixAttention 要解决的就是前缀复用问题：把已经算过的 prompt 组织成一棵可检索的前缀树，新请求到来时先找最长公共前缀，命中的部分直接复用，没命中的后缀再交给模型计算。本节用一个简化的 Python 结构模拟这件事，重点看清“缓存命中长度”如何转化为少算多少 token。
 
 **关键词：** `RadixAttention`, `prefix tree`, `multi-turn`
 
+---
 ## 前置阅读
 
-**导语：** 先把 PagedAttention、投机解码和显存账本理顺，再看基数树前缀复用会更容易。
+**导语：** 先把 KV Cache、PagedAttention 和投机解码看清楚，再进入 RadixAttention：这一节关注的不是单次 attention 公式，而是多请求之间如何复用已经算过的前缀。
 - [22. vLLM PagedAttention | vLLM PagedAttention](../02_PyTorch_Algorithms/22_vLLM_PagedAttention.md)
 - [23. Speculative Decoding | 投机解码](../02_PyTorch_Algorithms/23_Speculative_Decoding.md)
 - [P0: 20. Profiling and Memory Ledger | 性能剖析与显存账本](../00_Prerequisites/20_Profiling_and_Memory_Ledger.md)
 
 ## 相关阅读
 
-**导语：** RadixAttention 后，可以继续看显存分析、FlashAttention 显存模型和算子融合。
+**导语：** 学完 RadixAttention 后，可以继续看显存分析、调度和 profiling，判断前缀缓存是否真的降低了重算和首 token 延迟。
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 14. FlashAttention Memory Model | FlashAttention 显存模型](../01_Hardware_Math_and_Systems/14_FlashAttention_Memory_Model.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
+  
+---
 
 ### Step 1: 核心机制对比
 

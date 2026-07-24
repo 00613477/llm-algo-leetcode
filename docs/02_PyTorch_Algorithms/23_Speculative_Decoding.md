@@ -9,14 +9,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把 PagedAttention 和生成路径看清，再理解草稿模型与验证模型如何协作。
+---
+
+## 本节导读
+
+自回归生成最慢的地方，往往不是一次前向有多复杂，而是大模型必须一个 token 一个 token 地往前走。前面我们已经看过 KV Cache 和 PagedAttention 如何减少重复计算和显存碎片，本节继续看另一条推理加速路线：能不能先让小模型多猜几步，再由大模型一次性验证。
+
+投机解码要解决的问题是：在不改变最终生成分布的前提下，减少大模型逐 token 调用的次数。本节不会实现完整推理服务，而是把核心验证循环拆出来：草稿模型提出候选 token，目标模型给出概率校验，能接受就连续前进，拒绝时立刻停止并回到目标模型。
 
 **关键词：** `speculative decoding`, `draft model`, `verification`
 
-
+---
 ## 前置阅读
 
-**导语：** 先看 PagedAttention、KV Cache 和 FlashAttention 记忆模型，再看投机解码会更容易理解草稿模型与验证模型的协作。
+**导语：** 先理解自回归生成、KV Cache 和推理显存模型，再看投机解码会更容易抓住主线：它不是让小模型替代大模型，而是让小模型帮大模型减少重复的逐 token 调用。
 
 - [22. vLLM PagedAttention | vLLM PagedAttention](../02_PyTorch_Algorithms/22_vLLM_PagedAttention.md)
 - [P1: 11. KV Cache and Memory Growth | KV Cache 与显存增长](../01_Hardware_Math_and_Systems/11_KV_Cache_and_Memory_Growth.md)
@@ -25,10 +31,12 @@
 
 ## 相关阅读
 
-**导语：** 投机解码之后，可以继续看 RadixAttention 和量化。
+**导语：** 投机解码解决的是“少调用大模型几次”，后面可以继续看前缀缓存、异步执行和 profiling，判断真实系统里瓶颈是否真的被转移。
 
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
 - [P1: 17. CUDA Stream and Asynchrony | CUDA Stream 与异步执行](../01_Hardware_Math_and_Systems/17_CUDA_Stream_and_Asynchrony.md)
+
+---
 
 ### Step 1: 原理与公式
 

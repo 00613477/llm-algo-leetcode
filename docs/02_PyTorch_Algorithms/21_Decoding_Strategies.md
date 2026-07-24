@@ -9,24 +9,34 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-先把生成时的采样与搜索策略理顺，再理解解码阶段为什么会影响吞吐和质量。
+---
+
+## 本节导读
+
+模型生成下一个 token 时，并不是直接吐出一个词，而是先给整张词表打分。问题在于：永远选最高分会让输出过于死板，完全随机采样又容易失控。解码策略要做的，就是在“确定性”和“多样性”之间设定一套可控规则。
+
+本节会从最后一步 logits 出发，依次实现 temperature、top-k 和 top-p 三种常见控制方式，再把它们串成一个最小采样流水线。学完后，你应该能判断不同采样参数为什么会改变生成风格，以及这些策略为什么会影响推理质量和吞吐。
 
 **关键词：** `top-k`, `top-p`, `temperature`
 
+---
 
 ## 前置阅读
 
-**导语：** 先理解张量、训练闭环和显存分析，再看解码策略会更容易。
+**导语：** 先理解 logits、softmax 和最小训练接口，再看解码策略会更顺：本节关注的是模型已经给出分数之后，如何把分数变成下一个 token。
 - [P0: 11. PyTorch Optimizers and Loss | PyTorch 优化器与损失函数](../00_Prerequisites/11_PyTorch_Optimizers_and_Loss.md)
 - [P0: 12. PyTorch Minimal Training Interface | PyTorch 最小训练接口](../00_Prerequisites/12_PyTorch_Minimal_Training_Interface.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
 
 ## 相关阅读
 
-**导语：** 解码策略之后，可以继续看 KV Cache、显存增长和 FlashAttention。
+**导语：** 解码策略决定“选哪个 token”，后续的 KV Cache、PagedAttention 和投机解码则继续解决“怎样更快地生成更多 token”。
 - [P1: 11. KV Cache and Memory Growth | KV Cache 与显存增长](../01_Hardware_Math_and_Systems/11_KV_Cache_and_Memory_Growth.md)
+- [22. vLLM PagedAttention | vLLM 分页注意力](./22_vLLM_PagedAttention.md)
+- [23. Speculative Decoding | 投机解码](./23_Speculative_Decoding.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
-- [P1: 14. FlashAttention Memory Model | FlashAttention 显存模型](../01_Hardware_Math_and_Systems/14_FlashAttention_Memory_Model.md)
+
+---
 
 ### Step 1: 核心思想与痛点
 
