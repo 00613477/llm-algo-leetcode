@@ -10,24 +10,33 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将解析大模型当前最主流的位置编码方式：**RoPE (Rotary Position Embedding)**，并亲手用复数形式（Complex Tensor）实现它。这是 LLaMA, Qwen, DeepSeek 的标配！
-可以先把 RoPE 记成一件事：它不是给 token 加一个独立的位置向量，而是通过旋转 Query/Key 让位置信息进入注意力点积里。
+---
+
+## 本节导读
+
+Attention 本身只看 token 之间的相似度，并不知道谁在前、谁在后。没有位置编码，模型看到的更像一袋 token；但如果位置处理得太死，模型又很难泛化到更长的上下文。
+
+RoPE 的做法不是给 token 额外加一个位置向量，而是把位置信息写进 Query 和 Key 的旋转里，让注意力点积天然感知相对距离。本节会用纯 PyTorch 实现 RoPE，重点看清成对维度旋转、位置频率和 attention 内积之间的关系。完成后，你应该能把它接到后面的 MHA / GQA 和 KV Cache 实现里。
 
 **关键词：** `RoPE`, `positional encoding`, `complex tensor`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把张量变换和注意力直觉理顺，先看下面几页再进入 RoPE 会更顺。
+**导语：** 先把张量变换和注意力直觉理顺，再看位置信息如何进入 Query / Key 会更顺。
 
 - [P0: 05. PyTorch Tensor Fundamentals | PyTorch 张量基础操作](../00_Prerequisites/05_PyTorch_Tensor_Fundamentals.md)
 - [P0: 16. Attention Mechanism Intro | 注意力机制导论](../00_Prerequisites/16_Attention_Mechanism_Intro.md)
 
 ## 相关阅读
 
-**导语：** 本节先把 RoPE 的旋转位置编码数学推导讲清楚；如果想看它和 Attention 融合后在实现层怎么落地，再看硬件直觉和算子融合页面。
+**导语：** 理解 RoPE 后，可以继续看它如何进入多头注意力，以及相关算子在硬件和融合优化中的落地方式。
 
+- [04. Attention MHA GQA | 多头注意力](../02_PyTorch_Algorithms/04_Attention_MHA_GQA.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 本节说明 RoPE 的设计动机与核心思想。

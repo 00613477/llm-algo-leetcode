@@ -10,12 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将实现大语言模型（如 LLaMA、Gemma）中最常用的归一化技术：**RMSNorm (Root Mean Square Normalization)**。相比于传统的 LayerNorm，它能带来可观的训练加速，同时几乎不损失模型表现。本节聚焦 RMSNorm 的公式、精度实现和可运行代码上，让你快速上手。
+---
+
+## 本节导读
+
+Transformer 层数一深，中间激活的尺度就会不断变化。如果不做归一化，后面的矩阵乘法和激活函数很容易面对不稳定的输入；但标准 LayerNorm 又要同时计算均值和方差，在大模型里会带来额外开销。
+
+RMSNorm 选择更直接的做法：不再减均值，只用均方根控制特征尺度。本节会实现一个最小 RMSNorm，重点看清归一化维度、`eps` 的数值稳定作用，以及为什么许多 LLaMA 系模型会采用这种更轻的归一化层。完成后，你可以把它接到后面的 MLP、Attention 和完整 Transformer 组件里。
 
 **关键词：** `RMSNorm`, `LayerNorm`, `normalization`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把张量基础和归一化直觉理顺，先看下面几页会更顺。
+**导语：** 先把张量维度、训练循环和归一化直觉理顺，再看 RMSNorm 的实现会更顺。
 
 - [P0: 05. PyTorch Tensor Fundamentals | PyTorch 张量基础操作](../00_Prerequisites/05_PyTorch_Tensor_Fundamentals.md)
 - [P0: 13. Simple Neural Network Training | 简单神经网络训练循环](../00_Prerequisites/13_Simple_Neural_Network_Training.md)
@@ -23,11 +31,14 @@
 
 ## 相关阅读
 
-**导语：** 本节先用纯 PyTorch 讲清 RMSNorm 的归一化逻辑与数值稳定性；如果想看同一算子在更高吞吐实现里的做法，再看硬件与融合优化相关页面。
+**导语：** 理解 RMSNorm 后，可以继续看它在模型组件里的位置，以及同一类算子如何通过融合优化提升吞吐。
 
+- [02. SwiGLU Activation | SwiGLU 激活](../02_PyTorch_Algorithms/02_SwiGLU_Activation.md)
+- [04. Attention MHA GQA | 多头注意力](../02_PyTorch_Algorithms/04_Attention_MHA_GQA.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 RMSNorm 的核心洞察很朴素：既然大模型的中间层均值通常已接近0，何不干脆省掉"减去均值"这一步，只用均方根做归一化？

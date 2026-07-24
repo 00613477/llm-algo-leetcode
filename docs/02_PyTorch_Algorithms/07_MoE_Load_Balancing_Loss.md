@@ -10,22 +10,28 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-在上一节 `06_MoE_Router` 中，我们实现了 Top-K 路由。但在真实的 MoE 模型（如 Mixtral 8x7B, DeepSeek）训练中，会遇到一个非常严重的问题：**路由崩塌 (Router Collapse)**。
-即门控网络把大多数 Token 都发给少数几个专家，其他专家被长期闲置，MoE 就会退化成“少数专家过载、其余专家浪费”的状态。
-因此，面试官非常爱考：**如何用代码实现 MoE 的辅助损失函数 (Auxiliary Loss) 来强制负载均衡？**
+---
+
+## 本节导读
+
+上一节的 Router 已经能把 token 分给 Top-K 专家，但训练过程中它可能很快学会“偏科”：大量 token 被送到少数几个专家，其他专家长期拿不到样本。这样 MoE 表面上有很多参数，实际却退化成少数专家过载、其余专家闲置。
+
+负载均衡损失要解决的就是这个问题：在主任务 loss 之外加入一个很小的辅助项，同时约束专家被选中的频率和平均路由概率。本节会实现 MoE auxiliary loss，重点看清 $f_i$ 和 $P_i$ 分别统计什么。完成后，你应该能理解 Router 不只要会选专家，还要被训练目标约束得足够均衡。
 
 **关键词：** `MoE`, `Load Balancing`, `Auxiliary Loss`
+
+---
 ## 前置阅读
 
-**导语：** 先看 Router，再看负载均衡损失会更容易理解 MoE 为什么会塌缩。
+**导语：** 先看 Router 如何做 Top-K 分配，再看负载均衡损失如何约束专家使用率。
 
-- [P0: 13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../00_Prerequisites/13_End_to_End_Fine_Tuning_Experiment.md)
-- [20. FlashAttention Sim | FlashAttention 模拟](../02_PyTorch_Algorithms/20_FlashAttention_Sim.md)
+- [06. MoE Router | MoE 路由器](../02_PyTorch_Algorithms/06_MoE_Router.md)
+- [13. End-to-End Fine-Tuning Experiment | 端到端微调实验](../02_PyTorch_Algorithms/13_End_to_End_Fine_Tuning_Experiment.md)
 
 
 ## 相关阅读
 
-**导语：** 如果想继续看架构侧的技巧，可以顺着读 Qwen / Gemma 的变体。
+**导语：** 理解 MoE 的训练约束后，可以继续看显存、通信和 profiling 如何影响大规模 MoE 训练与部署。
 
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 - [P1: 06. VRAM Calculation and ZeRO | 显存计算与 ZeRO 优化](../01_Hardware_Math_and_Systems/06_VRAM_Calculation_and_ZeRO.md)

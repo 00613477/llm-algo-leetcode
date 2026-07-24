@@ -10,11 +10,17 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-前面的 `00-04` 不是零散的预热，而是在为这一节铺底：先把 Python、数据入口、对象封装和张量思维立住，再把这些底座接到真正的 LLaMA-3 Decoder Layer 上。到了这里，读者不再只是在看单个 API，而是在看一个完整 Block 怎样从组件拼成主干。
+---
 
-本节进入激动人心的“组装阶段”！我们会把之前实现的 **RMSNorm**、**RoPE** 和 **GQA (Grouped-Query Attention)** 拼装在一起，外加一个 **SwiGLU** 激活函数的 MLP 层，构建一个真正的 **LLaMA-3 Decoder Layer**。可以先把 Decoder Layer 记成一条固定流水线：先归一化，再做 Attention / MLP 变换，最后通过残差连接保留原始输入，并和新特征相加。
+## 本节导读
+
+前面的 RMSNorm、SwiGLU、RoPE 和 GQA 如果单独看，只是几个分散的组件；真正进入模型结构时，它们必须按固定顺序接成一个 Decoder Layer。这里最容易出错的不是单个公式，而是归一化位置、残差连接、Attention 分支和 MLP 分支之间的组织关系。
+
+本节进入组装阶段：把 RMSNorm、RoPE、GQA 和 SwiGLU MLP 拼成一个最小 LLaMA-3 Decoder Layer。完成后，你应该能把 Decoder Layer 理解成一条清晰流水线：先归一化，再分别经过 Attention / MLP 变换，最后用残差连接把原始输入和新特征合回去。这会成为后续 MoE、架构 trick、微调和推理优化的结构基线。
 
 **关键词：** `LLaMA3`, `Transformer Block`, `Decoder Layer`
+
+---
 ## 前置阅读
 
 **导语：** 如果还没把组成 Block 的关键组件理顺，先看下面几页再进入 LLaMA-3 Block 会更顺。
@@ -27,13 +33,16 @@
 
 ## 相关阅读
 
-**导语：** 本节先把 Block 组装讲清楚；如果想继续补实现封装和硬件、精度、融合优化背景，再看下面几页。
+**导语：** 理解 Decoder Layer 的组装方式后，可以继续看 MoE 如何替换部分 MLP，以及硬件、精度和融合优化如何影响这个 Block 的执行效率。
 
+- [06. MoE Router | MoE 路由器](../02_PyTorch_Algorithms/06_MoE_Router.md)
+- [08. Architecture Tricks | 架构技巧](../02_PyTorch_Algorithms/08_Architecture_Tricks.md)
 - [P0: 09. PyTorch nn.Module Basics | PyTorch nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 12. TensorCore and Mixed Precision | Tensor Core 与混合精度](../01_Hardware_Math_and_Systems/12_TensorCore_and_Mixed_Precision.md)
 - [P1: 19. Operator Fusion Introduction | 算子融合导论](../01_Hardware_Math_and_Systems/19_Operator_Fusion_Introduction.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 LLaMA 系列模型在 Transformer 基础上做了多项关键改进。这些改进共同构成了 LLaMA 的架构基础，也是后续实现 Decoder 层的核心依据。

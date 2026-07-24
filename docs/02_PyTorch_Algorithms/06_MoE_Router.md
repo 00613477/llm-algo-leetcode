@@ -10,14 +10,20 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将解析目前最火爆的模型架构：**MoE (Mixture of Experts)**。这也是 Mixtral、Grok、DeepSeek 等顶级开源模型背后的核心技术。
-面试中最常考的并不是专家的内部结构，而是那个“交通警察”——**路由机制 (Router) 和专家权重计算**。
-可以先把 MoE 记成“不是每个 token 都跑所有参数”，而是让 Router 决定它该去找哪几个专家，从而用稀疏激活换取更大的参数容量。
+---
+
+## 本节导读
+
+普通 Transformer Block 里的 MLP 是稠密计算：每个 token 都要经过同一组参数。模型越大，计算量也越大；但很多时候，一个 token 并不需要动用全部专家能力，只需要被送到最合适的少数分支。
+
+MoE 的核心就是把 MLP 拆成多个 expert，再用 Router 为每个 token 选择 Top-K 专家。本节会实现最小路由器，重点看清 router logits、softmax 概率、Top-K 选择和专家权重如何连接起来。完成后，你应该能理解 MoE 如何用稀疏激活换取更大的参数容量，也能为下一节的负载均衡损失做好准备。
 
 **关键词：** `MoE`, `Router`, `Sparse Routing`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把 Block 组装和 Attention 主线理顺，先看下面两页再进入 MoE 结构会更顺。
+**导语：** 先把 Decoder Layer 的基本结构和 `nn.Module` 封装理顺，再看 MoE 如何替换其中的稠密 MLP。
 
 - [05. LLaMA3 Block Tutorial | LLaMA3 Block 教程](../02_PyTorch_Algorithms/05_LLaMA3_Block_Tutorial.md)
 - [P0: 09. PyTorch nn.Module Basics | PyTorch nn.Module 基础](../00_Prerequisites/09_PyTorch_nn_Module_Basics.md)
@@ -25,11 +31,13 @@
 
 ## 相关阅读
 
-**导语：** 本节先把 Router 的路由决策讲清楚；如果想继续看训练时如何避免专家塌缩，再看负载均衡损失。
+**导语：** 理解 Router 的 Top-K 决策后，下一步要看训练中如何避免专家塌缩，以及 MoE 在分布式执行中的通信压力。
 
+- [07. MoE Load Balancing Loss | MoE 负载均衡损失](../02_PyTorch_Algorithms/07_MoE_Load_Balancing_Loss.md)
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 这一节先把稠密模型为什么贵、MoE 为什么能省算力讲清楚。

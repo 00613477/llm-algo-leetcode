@@ -10,25 +10,36 @@
 > [![Open In Studio](https://img.shields.io/badge/Open%20In-ModelScope-blueviolet?logo=alibabacloud)](https://modelscope.cn/my/mynotebook) *(国内推荐：魔搭社区免费实例)*
 
 
-本节我们将深入解析大语言模型的核心组件：**注意力机制**，并实现支持 KV Cache 和 GQA (Grouped-Query Attention) 的代码。
-可以先把 Attention 记成“当前 token 去回看历史 token”，KV Cache 是把历史信息存起来避免重复算，GQA 则是在效果和显存之间做折中。
+---
+
+## 本节导读
+
+生成式模型每次预测新 token，都要回看前面的上下文。序列越长，Attention 要读取和维护的历史信息越多；如果每一步都重复计算过去的 Key / Value，推理会非常浪费，而把它们全部缓存下来又会带来显存和带宽压力。
+
+本节把 Attention 的工程主线串起来：先实现多头注意力，再加入 KV Cache 避免重复计算，最后用 GQA 在表达能力和 KV Cache 开销之间折中。完成后，你应该能看懂现代 LLM 为什么会从 MHA 演进到 GQA，也能为后面的解码策略、PagedAttention 和推理优化章节建立基础。
 
 **关键词：** `Attention`, `GQA`, `KV Cache`
+
+---
 ## 前置阅读
 
-**导语：** 如果还没把基础的注意力概念补齐，先看下面几页，再进入多头注意力和 KV Cache 会更顺。
+**导语：** 先把基础注意力和 RoPE 位置编码补齐，再进入多头注意力、KV Cache 和 GQA 的实现会更顺。
 
 - [P0: 05. PyTorch Tensor Fundamentals | PyTorch 张量基础操作](../00_Prerequisites/05_PyTorch_Tensor_Fundamentals.md)
 - [P0: 16. Attention Mechanism Intro | 注意力机制导论](../00_Prerequisites/16_Attention_Mechanism_Intro.md)
+- [03. RoPE Tutorial | 旋转位置编码教程](../02_PyTorch_Algorithms/03_RoPE_Tutorial.md)
 
 ## 相关阅读
 
-**导语：** 本节先把多头注意力、GQA 和 KV Cache 的关系讲清楚；如果想继续看硬件与并行背景，再接下面几页。
+**导语：** 理解 MHA / GQA / KV Cache 后，可以继续看解码策略、KV Cache 管理和推理性能优化。
 
 - [P1: 03. GPU Architecture and Memory | GPU 物理架构与内存层级](../01_Hardware_Math_and_Systems/03_GPU_Architecture_and_Memory.md)
 - [P1: 05. Communication Topologies | 通信拓扑与分布式基石](../01_Hardware_Math_and_Systems/05_Communication_Topologies.md)
 - [P1: 13. Profiling and Bottleneck Analysis | 性能分析与瓶颈定位](../01_Hardware_Math_and_Systems/13_Profiling_and_Bottleneck_Analysis.md)
+- [21. Decoding Strategies | 解码策略](../02_PyTorch_Algorithms/21_Decoding_Strategies.md)
+- [22. vLLM PagedAttention | vLLM 与 PagedAttention](../02_PyTorch_Algorithms/22_vLLM_PagedAttention.md)
 
+---
 ### Step 1: 核心思想与痛点
 
 本节阐述 Attention 在推理阶段的性能挑战，以及从 MHA 演进到 GQA 的动机与路径。
