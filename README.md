@@ -1,7 +1,6 @@
 <h1 align="center">llm-algo-leetcode | 大模型算法与系统教程</h1>
 <p align="center">Notebook-first tutorial for LLM algorithms and systems.<br>面向大模型算法与系统的 Notebook-first 教程。</p>
 
-<p align="center">A practical tutorial with theory, walkthroughs, test cases, and solutions.</p>
 
 [中文版 (Chinese)](#中文版) | [English Version](#english-version)
 
@@ -9,13 +8,9 @@
 
 # 中文版
 
-## 📄 许可声明
-
-本仓库所有 `.ipynb` 文件中的文字内容（Markdown 单元格、公式、图示说明）采用 CC BY 4.0 协议；代码内容（Code 单元格、可执行实现）采用 Apache-2.0 协议。使用、转载、改编时，请按单元格类型分别遵守对应协议。文字协议见 [`LICENSE`](./LICENSE)，代码协议见 [`LICENSE-CODE`](./LICENSE-CODE)。
-
 ## 🎯 项目简介
 
-这是一个面向大模型入门到进阶的算法实战教程，以 LLM 为主线，帮助读者通过可运行、可验证、可回顾的 Notebook，从“会看”走到“会写、会调、会优化”。
+这是一个面向大模型入门到进阶的算法实战教程，以 LLM 为主线，帮助读者通过可运行、可验证、可回顾的 Notebook，从“会看”走到“会写、会调、会优化”。A practical tutorial with theory, walkthroughs, test cases, and solutions.
 
 ### ✨ 项目特点
 
@@ -28,12 +23,7 @@
 - **求职面试者**：巩固 LLM 算法工程师、AI 架构师、算子开发工程师的高频考点。
 - **AI 研发人员**：从代码底层理解显存优化、分布式通信与 Triton/CUDA 算子。
 
-### 📌 学习前提
-
-- 具备 Python 和深度学习基础，熟悉 PyTorch。
-- 高阶内容需要一定 C++/CUDA 基础。
-
-### 🧭 专题快捷入口
+## 🧭 专题快捷入口
 
 如果你不想从 Part 顺序硬读，可以先从下面这些专题进入：
 如果你只想先解决一个问题，可以直接从专题进入。
@@ -52,37 +42,6 @@
 
 ![教程总览保底图](./docs/image-1.png)
 
-```mermaid
-flowchart LR
-  P0["Part 0 前置知识"] --> P1["Part 1 硬件、数学与系统"]
-  P1 --> P2["Part 2 PyTorch 算法实战"]
-  P2 --> P3["Part 3 Triton 算子开发"]
-  P3 --> P4["Part 4 CUDA 与系统优化"]
-  P4 --> P5["Part 5 预留"]
-
-  Profiling["Profiling 专题"] --> P0
-  Profiling --> P1
-  Profiling --> P2
-  Profiling --> P3
-  Profiling --> P4
-
-  Compiler["编译与图优化专题"] --> P1
-  Compiler --> P2
-  Compiler --> P3
-  Compiler --> P4
-
-  Inference["推理优化专题"] --> P1
-  Inference --> P2
-
-  Parallel["通信与并行专题"] --> P1
-  Parallel --> P2
-
-  Memory["显存优化与性能调优专题"] --> P0
-  Memory --> P1
-  Memory --> P2
-
-  Study["组队学习 / 共学沉淀"] --> P2
-```
 
 ### 📚 资产总览
 
@@ -191,11 +150,10 @@ CNB 的具体使用方式和适用范围见 [使用指南](./docs/guide.md)。
 | :----| :---- | :---- |
 | lynn_jingjing | 项目发起人 | 一个算法工程师 |
 
-*(欢迎在此留下您的名字！)*
 
-## 📄 开源协议
+## 📄 许可声明
 
-本仓库中的教程文字采用 [CC BY 4.0](./LICENSE) 协议；代码采用 [Apache-2.0](./LICENSE-CODE) 协议。`.ipynb` 文件为混合内容，使用时请按单元格类型分别遵守对应协议。
+本仓库所有 `.ipynb` 文件中的文字内容（Markdown 单元格、公式、图示说明）采用 CC BY 4.0 协议；代码内容（Code 单元格、可执行实现）采用 Apache-2.0 协议。使用、转载、改编时，请按单元格类型分别遵守对应协议。文字协议见 [`LICENSE`](./LICENSE)，代码协议见 [`LICENSE-CODE`](./LICENSE-CODE)。
 
 ---
 
@@ -220,10 +178,6 @@ This is a practical LLM algorithm tutorial from beginner to advanced, built arou
 - **Job Seekers**: Reinforce common interview topics for LLM algorithm engineers, AI architects, and kernel developers.
 - **AI Practitioners**: Understand VRAM optimization, distributed communication, and Triton/CUDA operators from the code level.
 
-### 📌 Prerequisites
-
-- Basic Python and deep learning knowledge, plus PyTorch familiarity.
-- Advanced parts require some C++/CUDA background.
 
 ## 🌐 Tutorial Overview
 
@@ -231,37 +185,6 @@ This tutorial is organized into a vertical main line and cross-cutting tracks: t
 
 ![Tutorial overview fallback](./docs/image-1.png)
 
-```mermaid
-flowchart LR
-  P0["Part 0 Prerequisites"] --> P1["Part 1 Hardware, Math, and Systems"]
-  P1 --> P2["Part 2 PyTorch Algorithm Practice"]
-  P2 --> P3["Part 3 Triton Kernel Development"]
-  P3 --> P4["Part 4 CUDA and System Optimization"]
-  P4 --> P5["Part 5 Reserved"]
-
-  Profiling["Profiling Topic"] --> P0
-  Profiling --> P1
-  Profiling --> P2
-  Profiling --> P3
-  Profiling --> P4
-
-  Compiler["Compiler and Graph Optimization Topic"] --> P1
-  Compiler --> P2
-  Compiler --> P3
-  Compiler --> P4
-
-  Inference["Inference Optimization Topic"] --> P1
-  Inference --> P2
-
-  Parallel["Communication and Parallelism Topic"] --> P1
-  Parallel --> P2
-
-  Memory["Memory and Performance Tuning Topic"] --> P0
-  Memory --> P1
-  Memory --> P2
-
-  Study["Team Study / Shared Learning"] --> P2
-```
 
 ### 📚 Current Asset Overview
 
