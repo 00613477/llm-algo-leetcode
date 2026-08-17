@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1250" height="650" viewBox="0 0 1250 650">
+  <rect width="1250" height="650" fill="#121212"/>
+  <rect width="1250" height="56" fill="#282828"/>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 25px; fill: #e1e1e1; }
+    .title { font-size: 27px; fill: #f0f0f0; }
+    .test { fill: #ffcd64; }
+    .pass { fill: #78d2ff; }
+    .allpass { fill: #5ae682; font-weight: 700; }
+  </style>
+  <text x="24" y="37" class="title">Task 0 Test Run</text>
+  <text x="28" y="95">GitHub ID: 00613477</text>
+  <text x="28" y="137">Task 0 - 04_Attention_MHA_GQA.ipynb</text>
+  <text x="28" y="179" class="test">Testing MHA (Multi-Head Attention)...</text>
+  <text x="28" y="221" class="pass">PASS  MHA output shape: (2, 16, 128)</text>
+  <text x="28" y="263" class="test">Testing GQA (Grouped-Query Attention)...</text>
+  <text x="28" y="305" class="pass">PASS  GQA output shape: (2, 16, 128)</text>
+  <text x="28" y="347" class="pass">PASS  Compact GQA KV shape: (2, 2, 16, 32)</text>
+  <text x="28" y="389" class="test">Testing MQA (Multi-Query Attention)...</text>
+  <text x="28" y="431" class="pass">PASS  MQA KV heads: 1</text>
+  <text x="28" y="473" class="test">Testing KV Cache Autoregressive Decoding...</text>
+  <text x="28" y="515" class="pass">PASS  Decode output shape: (2, 1, 128)</text>
+  <text x="28" y="557" class="pass">PASS  Updated KV Cache shape: (2, 4, 6, 32)</text>
+  <text x="28" y="610" class="allpass">ALL TESTS PASSED - Attention operator implementation verified.</text>
+</svg>
